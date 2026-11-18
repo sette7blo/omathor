@@ -227,3 +227,16 @@ test("votes: counted among active nodes, your node matched locally, ADRs cached"
   assert.notEqual(bad.code, 0)
   assert.match(bad.err, /OMATHOR_GITLAB is not a valid https address/)
 })
+
+test("a curl config cannot make a request follow a redirect", async function() {
+  const home = path.join(tmp, "curl-home")
+  fs.mkdirSync(home, { recursive: true })
+  fs.writeFileSync(path.join(home, ".curlrc"), "location\n")
+  const hop = { CURL_HOME: home, OMATHOR_THORNODE: base + "/hop", OMATHOR_MIDGARD: base + "/hop", OMATHOR_RPC: base + "/hop" }
+  run(["fetch"], hop)
+  run(["names", "find", ME], hop)
+  run(["names", "refresh", "alpha"], hop)
+  const log = await requests()
+  assert.ok(log.filter(function(p) { return p.indexOf("/hop/") === 0 }).length >= 3)
+  assert.deepEqual(log.filter(function(p) { return p.indexOf("/landed/") === 0 }), [])
+})

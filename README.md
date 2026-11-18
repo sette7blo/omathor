@@ -212,7 +212,9 @@ Responses are compressed. That comes to about 40 MB a day with the panel
 closed, and about 90 MB if it stayed open all day.
 
 Requests are https, time out, are capped in size and do not follow
-redirects. Responses are trimmed to the fields the plugin uses before they
+redirects. They ignore your curl configuration (`~/.curlrc`), so a setting
+there cannot make them follow a redirect or skip the certificate check.
+Responses are trimmed to the fields the plugin uses before they
 are saved, and every value is cleaned before it is shown. THORNames are read
 only as described under [THORNames](#thornames). Your own THORNode
 and Midgard can be set in the settings: https, or plain http only to this

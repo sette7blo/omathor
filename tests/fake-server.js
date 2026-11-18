@@ -114,6 +114,13 @@ const server = http.createServer(function(req, res) {
     return
   }
   log.push(url.pathname)
+  // Anything below /hop is sent on to another host name for the same server.
+  if (url.pathname.indexOf("/hop/") === 0) {
+    res.statusCode = 302
+    res.setHeader("Location", "http://localhost:" + server.address().port + "/landed" + url.pathname.slice(4))
+    res.end()
+    return
+  }
   if (mode === "down") {
     res.statusCode = 503
     res.end("down")

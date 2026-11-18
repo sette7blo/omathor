@@ -6,6 +6,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- Requests no longer read your curl configuration (`~/.curlrc`), so a setting there
+  cannot make the refresh follow a redirect or skip the certificate check. A redirect is
+  now an error rather than an empty answer.
+
 ## [v0.1.2] - 2026-11-18
 
 ### Fixed

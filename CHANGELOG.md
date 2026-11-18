@@ -12,8 +12,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - Bar widget: a bolt coloured by THORChain's health and the state of your bonded nodes.
   Optionally shows the time to the next churn or what your bonds earned since the last
   churn.
-- Panel with four tabs: Network (churn, halts, vaults, queue, nodes, price), Bonds
-  (each node you bond to, with reward, APY, slash points and churn-out risk), Names and Chains.
+- Panel with six tabs: Network (churn, halts, vaults, queue, nodes, price), Bonds
+  (each node you bond to, with reward, APY, slash points and churn-out risk), Names, Votes,
+  Pools and Chains.
 - Churn state that follows the chain: blocked, halted by mimir, churning, due, or a
   countdown.
 - Several bond addresses; amounts in RUNE or USD.

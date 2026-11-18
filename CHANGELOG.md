@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.5] - 2026-11-18
+
 ### Security
 - Bond and node addresses and THORNames no longer appear in process arguments, where
   other accounts on the computer can read them. The panel passes them to `omathor` on
@@ -98,7 +100,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.5...HEAD
+[v0.1.5]: https://github.com/sette7blo/omathor/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/sette7blo/omathor/compare/v0.1.3...v0.1.4
 [v0.1.3]: https://github.com/sette7blo/omathor/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/sette7blo/omathor/compare/v0.1.1...v0.1.2

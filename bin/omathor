@@ -96,10 +96,15 @@ midgard_base() {
   printf '%s' "$DEFAULT_MIDGARD"
 }
 
-# get <base> <path>: the body, or a failure. Sizes and time are bounded and
-# redirects are not followed, so an endpoint cannot send us somewhere else.
+# Every request goes through here. -q (which only works as the first
+# argument) skips the user's curl config, so it cannot turn on redirects or
+# switch off certificate checks; --max-redirs 0 with -L turns any redirect
+# into an error, so an endpoint cannot send us somewhere else.
+http_request() { curl -q -L --max-redirs 0 "$@"; }
+
+# get <base> <path>: the body, or a failure. Sizes and time are bounded.
 get() {
-  curl -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
+  http_request -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
     --proto '=http,https' -H 'Accept: application/json' -- "$1$2"
 }
 
@@ -396,7 +401,7 @@ TRIM_NAME='{
 # get_code <base> <path> <file>: the HTTP status, with the body in <file>.
 # Unlike get, a 404 or 400 is an answer here, not a failure.
 get_code() {
-  curl -sS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" \
+  http_request -sS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" \
     --compressed --proto '=http,https' -H 'Accept: application/json' -o "$3" -w '%{http_code}' -- "$1$2"
 }
 

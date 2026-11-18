@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.3] - 2026-11-18
+
 ### Security
 - Requests no longer read your curl configuration (`~/.curlrc`), so a setting there
   cannot make the refresh follow a redirect or skip the certificate check. A redirect is
@@ -59,7 +61,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.3...HEAD
+[v0.1.3]: https://github.com/sette7blo/omathor/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/sette7blo/omathor/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/sette7blo/omathor/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/sette7blo/omathor/releases/tag/v0.1.0

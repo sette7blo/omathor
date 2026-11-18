@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.0] - 2026-11-18
+
 ### Added
 - Bar widget: a bolt coloured by THORChain's health and the state of your bonded nodes.
   Optionally shows the time to the next churn or what your bonds earned since the last
@@ -34,3 +36,6 @@ project uses [Semantic Versioning](https://semver.org/).
 - Public THORNode with a fallback, the THORChain RPC for the block header, and Midgard;
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
+
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.0...HEAD
+[v0.1.0]: https://github.com/sette7blo/omathor/releases/tag/v0.1.0

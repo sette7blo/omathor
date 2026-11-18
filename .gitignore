@@ -1,0 +1,10 @@
+*.bak.*
+*.swp
+*.tmp
+.DS_Store
+
+# install.sh renders this from omathor.desktop.in
+omathor.desktop
+
+# Local agent notes, never pushed
+CLAUDE.md

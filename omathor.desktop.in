@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Omathor
+GenericName=THORChain Status
+Comment=THORChain network health, the churn and your bonds
+Exec=@@OMATHOR_CLI@@ panel
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;Network;
+Keywords=thorchain;rune;churn;bond;node;omathor;
+Actions=refresh;
+
+[Desktop Action refresh]
+Name=Fetch now
+Exec=@@OMATHOR_CLI@@ refresh

@@ -1,0 +1,784 @@
+#!/usr/bin/env bash
+# CLI for the omathor Omarchy plugin: THORChain network health and bond
+# status. `fetch` reads the public THORNode and Midgard APIs into one small
+# snapshot file; the plugin's service turns that into summary.json, which the
+# other commands print. Read-only: nothing here signs or sends a transaction.
+# Bonds are looked up in the node list on this computer, so fetching never
+# sends a bond address. The one command that does is `names find`, which asks
+# Midgard which THORNames an address owns; the plugin runs it only when you
+# add an address or press Find names.
+
+set -euo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/omathor"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+SHELL_JSON="$CONFIG_HOME/omarchy/shell.json"
+SNAPSHOT="$STATE_DIR/snapshot.json"
+SUMMARY="$STATE_DIR/summary.json"
+NAMES="$STATE_DIR/names.json"
+VOTES="$STATE_DIR/votes.json"
+ADRS="$STATE_DIR/adrs.json"
+# ADR documents live in THORNode's repository.
+GITLAB_DEFAULT="https://gitlab.com/api/v4/projects/thorchain%2Fthornode"
+PLUGIN_ID="io.github.sette7blo.omathor"
+
+DEFAULT_THORNODE=(
+  "https://gateway.liquify.com/chain/thorchain_api"
+  "https://public-thornode.nativeswap.io"
+)
+DEFAULT_MIDGARD="https://gateway.liquify.com/chain/thorchain_midgard"
+# Only the latest block's height and time are needed. THORNode's block
+# endpoint returns the whole block with its transactions (about 300 KB); the
+# RPC's header is under 1 KB.
+DEFAULT_RPC=(
+  "https://gateway.liquify.com/chain/thorchain_rpc"
+  "https://public-thorchain-rpc.nativeswap.io"
+)
+
+# The full node list is about 1.6 MB (0.5 MB compressed); nothing else comes
+# close.
+MAX_BYTES=8000000
+# How old the node list may get; the service passes a shorter age while the
+# panel is open or the bar shows the reward.
+NODES_EVERY=1800
+JSON=false
+
+die() { printf 'omathor: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required for this command"; }
+
+prepare() {
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+}
+
+# https anywhere; plain http only to this computer or a private network, for
+# someone running their own node at home.
+valid_base() {
+  local url="$1"
+  [[ "$url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] && return 0
+  [[ "$url" =~ ^http://(localhost|127\.[0-9.]+|10\.[0-9.]+|192\.168\.[0-9.]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9.]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9.]+)(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]]
+}
+
+# The endpoints set in the panel live in the widget's entry in shell.json.
+setting() {
+  [[ -r "$SHELL_JSON" ]] || return 0
+  jq -r --arg id "$PLUGIN_ID" --arg key "$1" '
+    [.bar.layout // {} | .[]? | .[]? | objects | select(.id == $id)][0][$key] // empty
+  ' "$SHELL_JSON" 2>/dev/null || true
+}
+
+custom_thornode() {
+  local custom
+  custom="${OMATHOR_THORNODE:-$(setting thornode)}"
+  printf '%s' "${custom%/}"
+}
+
+endpoint_list() {
+  local custom
+  custom="$(custom_thornode)"
+  if [[ -n "$custom" ]]; then
+    valid_base "$custom" || die "the THORNode address in the settings is not a valid https address: $custom"
+    printf '%s\n' "$custom"
+    return
+  fi
+  printf '%s\n' "${DEFAULT_THORNODE[@]}"
+}
+
+midgard_base() {
+  local custom
+  custom="${OMATHOR_MIDGARD:-$(setting midgard)}"
+  custom="${custom%/}"
+  if [[ -n "$custom" ]]; then
+    valid_base "$custom" || die "the Midgard address in the settings is not a valid https address: $custom"
+    printf '%s' "$custom"
+    return
+  fi
+  printf '%s' "$DEFAULT_MIDGARD"
+}
+
+# get <base> <path>: the body, or a failure. Sizes and time are bounded and
+# redirects are not followed, so an endpoint cannot send us somewhere else.
+get() {
+  curl -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
+    --proto '=http,https' -H 'Accept: application/json' -- "$1$2"
+}
+
+# The first THORNode that answers every light request is used for all of
+# them, so one snapshot never mixes two nodes' views of the chain.
+BASE=""
+pick_base() {
+  local base
+  while IFS= read -r base; do
+    if get "$base" /thorchain/lastblock >/dev/null 2>&1; then
+      BASE="$base"
+      return 0
+    fi
+  done < <(endpoint_list)
+  return 1
+}
+
+# --- Trimming --------------------------------------------------------------
+# Only the fields the plugin reads are kept, so the snapshot stays small and
+# anything unexpected in a response never reaches the UI.
+
+TRIM_NODES='
+  def num: (tonumber? // 0);
+  def s($n): (. // "" | tostring | .[0:$n]);
+  [ .[] | select(type == "object") | {
+      address: (.node_address | s(80)),
+      status: (.status | s(20)),
+      operator: (.node_operator_address | s(80)),
+      bond: (.total_bond | num),
+      fee: (.bond_providers.node_operator_fee | num),
+      # Every provider is kept: the limit is a mimir value (MAXBONDPROVIDERS) that can rise,
+      # and the download itself is size-capped.
+      providers: [ (.bond_providers.providers // [])[] | { address: (.bond_address | s(80)), bond: (.bond | num) } ],
+      slash: (.slash_points | num),
+      jailUntil: (.jail.release_height | num),
+      jailReason: (.jail.reason | s(80)),
+      version: (.version | s(20)),
+      award: (.current_award | num),
+      leaving: (.requested_to_leave == true),
+      forced: (.forced_to_leave == true),
+      activeSince: (.active_block_height | num),
+      statusSince: (.status_since | num),
+      preflight: (.preflight_status.status | s(20)),
+      preflightReason: (.preflight_status.reason | s(160)),
+      maintenance: (.maintenance == true),
+      missing: (.missing_blocks | num)
+    } ][:400]'
+
+TRIM_MIMIR='
+  with_entries(select(.key | test("^(HALT|PAUSE|SOLVENCYHALT|STOPSOLVENCY|CHURNINTERVAL$|CHURNMIGRATEROUNDS$|DESIREDVALIDATORSET$|MINIMUMBONDINRUNE$|NUMBEROFNEWNODESPERCHURN$|MAXNODETOCHURNOUTFORLOWVERSION$|CHURNOUTFORLOWVERSIONBLOCKS$)"))
+    | select(.key | test("^[A-Z0-9-]{1,120}$")) | .value |= (tonumber? // 0))'
+
+TRIM_INBOUND='
+  [ .[]? | select(type == "object") | {
+      chain: (.chain // "" | tostring | .[0:12]),
+      halted: (.halted == true),
+      tradingPaused: (.chain_trading_paused == true),
+      lpPaused: (.chain_lp_actions_paused == true),
+      globalTradingPaused: (.global_trading_paused == true),
+      gasRate: (.gas_rate // "" | tostring | .[0:20]),
+      gasUnits: (.gas_rate_units // "" | tostring | .[0:20]),
+      outboundFee: (.outbound_fee | tonumber? // 0)
+    } ][:40]'
+
+TRIM_LASTBLOCK='
+  [ .[]? | select(type == "object") | {
+      chain: (.chain // "" | tostring | .[0:12]),
+      observed: (.last_observed_in | tonumber? // 0),
+      signed: (.last_signed_out | tonumber? // 0),
+      thorchain: (.thorchain | tonumber? // 0)
+    } ][:40]'
+
+TRIM_VAULTS='
+  [ .[]? | select(type == "object") | {
+      status: (.status // "" | tostring | .[0:24]),
+      height: (.block_height | tonumber? // 0),
+      since: (.status_since | tonumber? // 0),
+      members: ((.membership // []) | length)
+    } ][:40]'
+
+TRIM_NETWORK='{
+  bondRewardRune: (.bond_reward_rune | tonumber? // 0),
+  effectiveSecurityBond: (.effective_security_bond | tonumber? // 0),
+  vaultsLiquidity: (.vaults_liquidity_rune | tonumber? // 0),
+  totalReserve: (.total_reserve | tonumber? // 0),
+  vaultsMigrating: (.vaults_migrating == true),
+  runePriceInTor: (.rune_price_in_tor | tonumber? // 0)
+}'
+
+TRIM_QUEUE='{ swap: (.swap | tonumber? // 0), outbound: (.outbound | tonumber? // 0), internal: (.internal | tonumber? // 0) }'
+TRIM_VERSION='{ current: (.current // "" | tostring | .[0:20]), next: (.next // "" | tostring | .[0:20]), nextSince: (.next_since_height | tonumber? // 0) }'
+TRIM_BLOCK='{ height: (.block.header.height | tonumber? // 0), time: (.block.header.time // "" | tostring | .[0:40]) }'
+TRIM_HEADER='{ height: (.result.header.height | tonumber? // 0), time: (.result.header.time // "" | tostring | .[0:40]) } | if .height > 0 then . else error("no header") end'
+TRIM_UPGRADES='[ .[]? | select(type == "object") | {
+  name: (.name // "" | tostring | .[0:40]),
+  height: (.height | tonumber? // 0),
+  approved: (.approved == true),
+  percent: (.approved_percent | tonumber? // 0),
+  toQuorum: (.validators_to_quorum | tonumber? // 0)
+} ][:5]'
+TRIM_CONSTANTS='{
+  churnInterval: (.int_64_values.ChurnInterval // 0),
+  desiredValidators: (.int_64_values.DesiredValidatorSet // 0),
+  lowVersionBlocks: (.int_64_values.ChurnOutForLowVersionBlocks // 0),
+  lowVersionMax: (.int_64_values.MaxNodeToChurnOutForLowVersion // 0)
+}'
+# Midgard's pools: depths and volume in RUNE (1e8), the 2% depths being how
+# much RUNE moves the price by about 2%.
+TRIM_POOLS='[ .[]? | select(type == "object") | {
+  asset: (.asset // "" | tostring | .[0:80]),
+  status: (.status // "" | tostring | .[0:12]),
+  runeDepth: (.runeDepth | tonumber? // 0),
+  depth2: (([(.depthMinus2Percent | tonumber? // 0), (.depthPlus2Percent | tonumber? // 0)] | min)),
+  volume24h: (.volume24h | tonumber? // 0),
+  apr: (.annualPercentageRate | tonumber? // 0)
+} | select(.asset | test("^[A-Z0-9]{1,12}[.~-][A-Za-z0-9._-]{1,70}$")) ][:200]'
+TRIM_CHURNS='[ .[:10][]? | { height: (.height | tonumber? // 0), date: (.date // "0" | tostring | .[0:13] | tonumber? // 0) } ]'
+TRIM_MIDGARD_NET='{
+  bondingAPY: (.bondingAPY | tonumber? // 0),
+  liquidityAPY: (.liquidityAPY | tonumber? // 0),
+  poolShareFactor: (.poolShareFactor | tonumber? // 0),
+  totalPooledRune: (.totalPooledRune | tonumber? // 0)
+}'
+
+# fetch_part <name> <base> <path> <jq filter>: writes the trimmed body to the
+# work folder, or nothing when the request or the filter fails.
+fetch_part() {
+  local body
+  body="$(get "$2" "$3" 2>/dev/null)" || return 1
+  printf '%s' "$body" | jq -c "$4" > "$WORK/$1.json" 2>/dev/null || { rm -f "$WORK/$1.json"; return 1; }
+}
+
+nodes_age() {
+  [[ -r "$SNAPSHOT" ]] || { echo 999999; return; }
+  local at
+  at="$(jq -r '.nodesAt // 0' "$SNAPSHOT" 2>/dev/null || echo 0)"
+  echo $(( $(date +%s) - ${at%.*} ))
+}
+
+# The block from the RPC header, falling back to THORNode's own block
+# endpoint. With your own THORNode set, the public RPCs are not used.
+# OMATHOR_RPC names one RPC to use instead.
+rpc_list() {
+  if [[ -n "${OMATHOR_RPC:-}" ]]; then
+    valid_base "${OMATHOR_RPC%/}" || die "OMATHOR_RPC is not a valid https address: $OMATHOR_RPC"
+    printf '%s\n' "${OMATHOR_RPC%/}"
+  elif [[ -z "$(custom_thornode)" ]]; then
+    printf '%s\n' "${DEFAULT_RPC[@]}"
+  fi
+}
+
+fetch_block() {
+  local rpc
+  while IFS= read -r rpc; do
+    fetch_part block "$rpc" /header "$TRIM_HEADER" && return 0
+  done < <(rpc_list)
+  fetch_part block "$BASE" /cosmos/base/tendermint/v1beta1/blocks/latest "$TRIM_BLOCK"
+}
+
+cmd_fetch() {
+  need curl; need jq
+  local full=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --full) full=true; shift ;;
+      --nodes-age)
+        [[ "${2:-}" =~ ^[0-9]{1,6}$ ]] || die "--nodes-age takes a number of seconds"
+        NODES_EVERY="$2"; shift 2 ;;
+      *) die "fetch takes --full and --nodes-age <seconds>" ;;
+    esac
+  done
+  prepare
+  (( $(nodes_age) >= NODES_EVERY )) && full=true
+
+  WORK="$(mktemp -d -p "$STATE_DIR" .fetch.XXXXXX)"
+  trap 'rm -rf "$WORK"' EXIT
+
+  if ! pick_base; then
+    record_error "no THORNode endpoint answered"
+    die "no THORNode endpoint answered"
+  fi
+
+  local failed=()
+  fetch_part lastblock "$BASE" /thorchain/lastblock "$TRIM_LASTBLOCK" || failed+=(lastblock)
+  fetch_part mimir "$BASE" /thorchain/mimir "$TRIM_MIMIR" || failed+=(mimir)
+  fetch_part inbound "$BASE" /thorchain/inbound_addresses "$TRIM_INBOUND" || failed+=(inbound)
+  fetch_part vaults "$BASE" /thorchain/vaults/asgard "$TRIM_VAULTS" || failed+=(vaults)
+  fetch_part network "$BASE" /thorchain/network "$TRIM_NETWORK" || failed+=(network)
+  fetch_part queue "$BASE" /thorchain/queue "$TRIM_QUEUE" || failed+=(queue)
+  fetch_part version "$BASE" /thorchain/version "$TRIM_VERSION" || failed+=(version)
+  fetch_block || failed+=(block)
+
+  # The light parts are what the bar shows; without them the old snapshot
+  # stays, marked with the error.
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    record_error "$BASE did not answer for: ${failed[*]}"
+    die "$BASE did not answer for: ${failed[*]}"
+  fi
+
+  if $full; then
+    local body
+    if body="$(get "$BASE" /thorchain/nodes 2>/dev/null)"; then
+      printf '%s' "$body" | jq -c "$TRIM_NODES" > "$WORK/nodes.json" 2>/dev/null || rm -f "$WORK/nodes.json"
+    fi
+    unset body
+    fetch_part constants "$BASE" /thorchain/constants "$TRIM_CONSTANTS" || true
+    fetch_part upgrades "$BASE" /thorchain/upgrade_proposals "$TRIM_UPGRADES" || true
+    local midgard
+    midgard="$(midgard_base)"
+    fetch_part churns "$midgard" /v2/churns "$TRIM_CHURNS" || true
+    fetch_part midgardNetwork "$midgard" /v2/network "$TRIM_MIDGARD_NET" || true
+    fetch_part pools "$midgard" /v2/pools "$TRIM_POOLS" || true
+  fi
+
+  write_snapshot
+  $JSON && cat "$SNAPSHOT" || echo "fetched from $BASE"
+}
+
+# Parts that were not fetched this time are carried over from the last
+# snapshot, each with the time it was fetched.
+write_snapshot() {
+  local now old tmp
+  now="$(date +%s)"
+  old="$SNAPSHOT"
+  [[ -r "$old" ]] && jq -e . "$old" >/dev/null 2>&1 || old=/dev/null
+  local args=(--argjson now "$now" --arg source "$BASE")
+  local part
+  for part in lastblock mimir inbound vaults network queue version block nodes constants upgrades churns midgardNetwork pools; do
+    if [[ -s "$WORK/$part.json" ]]; then
+      args+=(--slurpfile "$part" "$WORK/$part.json")
+    else
+      args+=(--argjson "$part" '[]')
+    fi
+  done
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  jq -n "${args[@]}" --slurpfile old <(cat "$old" 2>/dev/null || echo '{}') '
+    ($old[0] // {}) as $o
+    | def pick($new; $key): if ($new | length) > 0 then $new[0] else ($o[$key] // null) end;
+    {
+      version: 1,
+      fetchedAt: $now,
+      source: $source,
+      error: "",
+      lastblock: pick($lastblock; "lastblock"),
+      mimir: pick($mimir; "mimir"),
+      inbound: pick($inbound; "inbound"),
+      vaults: pick($vaults; "vaults"),
+      network: pick($network; "network"),
+      queue: pick($queue; "queue"),
+      thorVersion: pick($version; "thorVersion"),
+      block: pick($block; "block"),
+      nodes: pick($nodes; "nodes"),
+      nodesAt: (if ($nodes | length) > 0 then $now else ($o.nodesAt // 0) end),
+      constants: pick($constants; "constants"),
+      upgrades: pick($upgrades; "upgrades"),
+      churns: pick($churns; "churns"),
+      midgardNetwork: pick($midgardNetwork; "midgardNetwork"),
+      pools: pick($pools; "pools")
+    }' > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$SNAPSHOT"
+}
+
+record_error() {
+  prepare
+  local tmp
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  if [[ -r "$SNAPSHOT" ]] && jq --arg e "$1" --argjson t "$(date +%s)" '.error = $e | .errorAt = $t' "$SNAPSHOT" > "$tmp" 2>/dev/null; then
+    :
+  else
+    jq -n --arg e "$1" --argjson t "$(date +%s)" '{version: 1, fetchedAt: 0, error: $e, errorAt: $t}' > "$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$SNAPSHOT"
+}
+
+# --- THORNames --------------------------------------------------------------
+# There is no list of every name to search locally, so each name is asked for
+# by name. names.json keeps what was read, so the panel can count down to the
+# expiry without asking again.
+
+valid_name() { [[ "$1" =~ ^[a-z0-9+_-]{1,30}$ ]]; }
+valid_address() { [[ "$1" =~ ^thor1[02-9ac-hj-np-z]{38}$ ]]; }
+
+TRIM_NAME='{
+  owner: (.owner // "" | tostring | .[0:80]),
+  expire: (.expire_block_height | tonumber? // 0),
+  preferred: (.preferred_asset // "" | tostring | .[0:80]),
+  threshold: (.preferred_asset_swap_threshold_rune | tonumber? // 0),
+  collector: (.affiliate_collector_rune | tonumber? // 0),
+  aliases: [ .aliases[]? | select(type == "object") | { chain: (.chain // "" | tostring | .[0:12]), address: (.address // "" | tostring | .[0:120]) } ][:30]
+}'
+
+# get_code <base> <path> <file>: the HTTP status, with the body in <file>.
+# Unlike get, a 404 or 400 is an answer here, not a failure.
+get_code() {
+  curl -sS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" \
+    --compressed --proto '=http,https' -H 'Accept: application/json' -o "$3" -w '%{http_code}' -- "$1$2"
+}
+
+# The names saved in the panel, when none are given.
+names_setting() {
+  [[ -r "$SHELL_JSON" ]] || return 0
+  jq -r --arg id "$PLUGIN_ID" '
+    [.bar.layout // {} | .[]? | .[]? | objects | select(.id == $id)][0].names // []
+    | .[]? | (if type == "object" then .name else . end) | strings
+  ' "$SHELL_JSON" 2>/dev/null || true
+}
+
+# Prints {"thor1…": ["name", …]} for each address given.
+names_find() {
+  need curl; need jq
+  [[ $# -gt 0 ]] || die "names find needs at least one thor1 address"
+  local midgard addr code result='{}' found
+  midgard="$(midgard_base)"
+  prepare
+  # Global, so the exit trap still sees it.
+  FIND_TMP="$(mktemp -p "$STATE_DIR" .find.XXXXXX)"
+  trap 'rm -f "$FIND_TMP"' EXIT
+  for addr in "$@"; do
+    valid_address "$addr" || die "not a THORChain address: $addr"
+    code="$(get_code "$midgard" "/v2/thorname/owner/$addr" "$FIND_TMP")" || die "Midgard did not answer"
+    case "$code" in
+      200) found="$(jq -c '[.[]? | strings | ascii_downcase | select(test("^[a-z0-9+_-]{1,30}$"))] | unique | .[:20]' "$FIND_TMP" 2>/dev/null)" \
+             || die "Midgard sent something that is not a name list" ;;
+      # Midgard answers 404 for an address that owns no name.
+      404) found='[]' ;;
+      *) die "Midgard answered $code" ;;
+    esac
+    result="$(jq -c --arg a "$addr" --argjson f "$found" '. + {($a): $f}' <<<"$result")"
+  done
+  mark_searched "$@"
+  if $JSON; then printf '%s\n' "$result"; else jq -r 'to_entries[] | .key + ": " + (if (.value | length) > 0 then (.value | join(", ")) else "no names" end)' <<<"$result"; fi
+}
+
+names_refresh() {
+  need curl; need jq
+  local names=("$@")
+  if [[ ${#names[@]} -eq 0 ]]; then
+    mapfile -t names < <(names_setting)
+  fi
+  [[ ${#names[@]} -gt 0 ]] || { echo "no names to refresh"; return 0; }
+  prepare
+  WORK="$(mktemp -d -p "$STATE_DIR" .names.XXXXXX)"
+  trap 'rm -rf "$WORK"' EXIT
+  local name base code failed=0 got
+  local bases
+  mapfile -t bases < <(endpoint_list)
+  : > "$WORK/results"
+  for name in "${names[@]}"; do
+    name="${name,,}"
+    valid_name "$name" || die "not a THORName: $name"
+    got=""
+    for base in "${bases[@]}"; do
+      code="$(get_code "$base" "/thorchain/thorname/$name" "$WORK/body" 2>/dev/null)" || continue
+      if [[ "$code" == 200 ]]; then
+        got="$(jq -c --arg n "$name" "$TRIM_NAME"' + {name: $n, found: true}' "$WORK/body" 2>/dev/null)" && break
+        got=""
+      elif [[ "$code" == 400 ]] && grep -q "doesn't exist" "$WORK/body"; then
+        got="$(jq -nc --arg n "$name" '{name: $n, found: false}')"
+        break
+      fi
+    done
+    if [[ -n "$got" ]]; then
+      printf '%s\n' "$got" >> "$WORK/results"
+    else
+      failed=$((failed + 1))
+      jq -nc --arg n "$name" '{name: $n, failed: true}' >> "$WORK/results"
+    fi
+  done
+  write_names "$WORK/results"
+  if (( failed > 0 )); then
+    die "no THORNode endpoint answered for $failed of ${#names[@]} names"
+  fi
+  echo "refreshed ${#names[@]} name$( (( ${#names[@]} == 1 )) || echo s)"
+}
+
+# Records that these addresses were searched, so the plugin searches each
+# address only once.
+mark_searched() {
+  local tmp old="$NAMES"
+  [[ -r "$old" ]] && jq -e . "$old" >/dev/null 2>&1 || old=/dev/null
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  jq -n --argjson now "$(date +%s)" --slurpfile old <(cat "$old" 2>/dev/null || echo '{}') '
+    ($old[0] // {}) as $o
+    | {version: 1, items: ($o.items // {}), searched: (reduce $ARGS.positional[] as $a (($o.searched // {}); .[$a] = $now))}
+  ' --args "$@" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$NAMES"
+}
+
+# A name that could not be read keeps what was read before, with the error.
+write_names() {
+  local tmp old="$NAMES"
+  [[ -r "$old" ]] && jq -e . "$old" >/dev/null 2>&1 || old=/dev/null
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  jq -n --argjson now "$(date +%s)" --slurpfile old <(cat "$old" 2>/dev/null || echo '{}') --slurpfile new "$1" '
+    ($old[0] // {}) as $o
+    | ($o.items // {})
+    | reduce $new[] as $r (.;
+        if $r.failed then .[$r.name] = ((.[$r.name] // {}) + {error: "no endpoint answered", errorAt: $now})
+        else .[$r.name] = ($r + {fetchedAt: $now, error: ""}) end)
+    | {version: 1, items: ., searched: ($o.searched // {})}' > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$NAMES"
+}
+
+names_forget() {
+  need jq
+  [[ -r "$NAMES" ]] || return 0
+  local tmp
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  # Names and addresses alike: a forgotten address is searched again if it
+  # is added back.
+  jq --args '
+    ($ARGS.positional) as $gone
+    | .items |= with_entries(select(.key as $k | $gone | index($k) | not))
+    | .searched = ((.searched // {}) | with_entries(select(.key as $k | $gone | index($k) | not)))
+  ' "$@" < "$NAMES" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$NAMES"
+}
+
+cmd_names() {
+  local sub="${1:-show}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    show) print_section names ;;
+    find) names_find "$@" ;;
+    refresh) names_refresh "$@" ;;
+    forget) names_forget "$@" ;;
+    *) die "names takes show, find, refresh or forget" ;;
+  esac
+}
+
+# --- Votes -----------------------------------------------------------------
+# Node votes on mimir settings, counted among active nodes only, the way
+# THORNode counts them. Read only while the Votes tab is used. The node
+# addresses given are matched locally to show how those nodes voted; they
+# are not sent anywhere.
+
+TRIM_VOTES='
+  ($active[0] // []) as $act
+  | ($act | length) as $n
+  | (reduce $act[] as $a ({}; .[$a] = true)) as $isActive
+  | ($ARGS.positional) as $mine
+  | [ (.mimirs // [])[]? | select(type == "object") | {
+        key: (.key // "" | tostring | .[0:80]),
+        value: (.value | tonumber? // 0),
+        signer: (.signer // "" | tostring)
+      } | select(.key | test("^[A-Za-z0-9-]{1,80}$")) ] as $all
+  # One vote per signer and key, as THORNode keeps it.
+  | ($all | map(select($isActive[.signer])) | unique_by([.key, .signer])) as $votes
+  | {
+      version: 1,
+      active: $n,
+      need: (((2 * $n) + 2) / 3 | floor),
+      keys: ([ $votes | group_by(.key)[] | {
+          key: .[0].key,
+          voters: length,
+          values: ([ group_by(.value)[] | { v: .[0].value, n: length } ] | sort_by(-.n) | .[:3]),
+          inForce: ($consensus[0][.[0].key] // null)
+        } ] | sort_by(-.values[0].n) | .[:300]),
+      mine: (reduce $mine[] as $m ({}; .[$m] = [ $all[] | select(.signer == $m) | { key, v: .value } ][:300]))
+    }'
+
+# Title, status and the first sentence of the context, from an ADR's markdown.
+PARSE_ADR='
+  def clean: gsub("\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; .t) | gsub("[`*_]"; "") | gsub("\\s+"; " ") | sub("^ "; "");
+  [ split("\n")[] | sub("\\s+$"; "") ] as $l
+  | ($l | index("## Status")) as $si
+  | ($l | index("## Context")) as $ci
+  | {
+      title: ([ $l[] | select(startswith("# ")) ][0] // "" | sub("^# *"; "") | sub("^(?i)ADR[ -]?0*[0-9]+ *: *"; "") | clean | .[0:120]),
+      status: (if $si then ([ $l[$si + 1:][] | select(test("\\S")) ][0] // "") else "" end | clean | .[0:40]),
+      # The first paragraph after the heading, which markdown wraps over
+      # several lines.
+      summary: (if $ci then ($l[$ci + 1:]
+          | (map(test("^\\s*($|#)") | not) | index(true)) as $from
+          | if $from == null then "" else (.[$from:] | (map(test("^\\s*$")) | index(true)) as $to | .[:$to] | join(" ")) end)
+        else "" end
+        | clean | ((capture("^(?<s>.*?[.!?])(\\s|$)").s) // .) | .[0:240])
+    }'
+
+# OMATHOR_GITLAB points the ADR lookups elsewhere (the tests use it); it is
+# held to the same rules as the other endpoints.
+gitlab_base() {
+  local custom="${OMATHOR_GITLAB:-}"
+  custom="${custom%/}"
+  if [[ -n "$custom" ]]; then
+    valid_base "$custom" || die "OMATHOR_GITLAB is not a valid https address: $custom"
+    printf '%s' "$custom"
+    return
+  fi
+  printf '%s' "$GITLAB_DEFAULT"
+}
+
+# Refreshes the ADR cache for the ADR numbers given: the file list at most
+# once a day, and a document only when it changed. Failures keep the cache.
+refresh_adrs() {
+  local nums=("$@") now tree_at tree cache
+  now="$(date +%s)"
+  cache="$( [[ -r "$ADRS" ]] && jq -c . "$ADRS" 2>/dev/null || echo '{}')"
+  tree_at="$(jq -r '.treeAt // 0' <<<"$cache")"
+  if (( now - tree_at >= 86400 )); then
+    if tree="$(get "$GITLAB" "/repository/tree?path=docs/architecture&per_page=100" 2>/dev/null)"; then
+      cache="$(jq -c --argjson now "$now" --argjson tree "$(jq -c '[ .[]? | select(type == "object") | {name: (.name // "" | tostring), id: (.id // "" | tostring)}
+          | select(.name | test("^(?i)adr-[0-9]+-[A-Za-z0-9._-]+\\.md$")) | select(.id | test("^[0-9a-f]{40}$"))
+          | . + {num: (.name | capture("^(?i)adr-0*(?<n>[0-9]+)").n)} ]' <<<"$tree" 2>/dev/null || echo '[]')" '
+        .treeAt = $now
+        | .files = (reduce $tree[] as $t ((.files // {}); .[$t.num] = ((.[$t.num] // {}) + {file: $t.name, id: $t.id})))' <<<"$cache")"
+    fi
+  fi
+  local n id have doc parsed
+  for n in "${nums[@]}"; do
+    id="$(jq -r --arg n "$n" '.files[$n].id // empty' <<<"$cache")"
+    have="$(jq -r --arg n "$n" '.files[$n].parsedId // empty' <<<"$cache")"
+    [[ -n "$id" && "$id" != "$have" ]] || continue
+    doc="$(get "$GITLAB" "/repository/blobs/$id/raw" 2>/dev/null)" || continue
+    parsed="$(jq -Rs -c "$PARSE_ADR" <<<"$doc" 2>/dev/null)" || continue
+    cache="$(jq -c --arg n "$n" --arg id "$id" --argjson p "$parsed" '.files[$n] += ($p + {parsedId: $id})' <<<"$cache")"
+  done
+  local tmp
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  printf '%s\n' "$cache" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$ADRS"
+}
+
+votes_fetch() {
+  need curl; need jq
+  local node
+  for node in "$@"; do valid_address "$node" || die "not a node address: $node"; done
+  # A plain assignment, so a refused address stops the command here.
+  GITLAB="$(gitlab_base)"
+  [[ -r "$SNAPSHOT" ]] && jq -e '.nodes | length > 0' "$SNAPSHOT" >/dev/null 2>&1 || die "no node list yet; run omathor fetch --full first"
+  prepare
+  pick_base || die "no THORNode endpoint answered"
+  WORK="$(mktemp -d -p "$STATE_DIR" .votes.XXXXXX)"
+  trap 'rm -rf "$WORK"' EXIT
+  jq -c '[.nodes[] | select(.status == "Active") | .address]' "$SNAPSHOT" > "$WORK/active.json"
+  get "$BASE" /thorchain/mimir/nodes > "$WORK/consensus.raw" || die "$BASE did not answer for the node mimir"
+  jq -c 'with_entries(select(.key | test("^[A-Za-z0-9-]{1,80}$")) | .value |= (tonumber? // 0))' "$WORK/consensus.raw" > "$WORK/consensus.json" 2>/dev/null \
+    || die "$BASE sent a node mimir that is not JSON"
+  get "$BASE" /thorchain/mimir/nodes_all > "$WORK/all.raw" || die "$BASE did not answer for the node votes"
+  jq -c --slurpfile active "$WORK/active.json" --slurpfile consensus "$WORK/consensus.json" "$TRIM_VOTES" --args "$@" < "$WORK/all.raw" > "$WORK/votes.json" 2>/dev/null \
+    || die "$BASE sent node votes that are not JSON"
+  rm -f "$WORK/all.raw"
+  local nums
+  mapfile -t nums < <(jq -r '.keys[].key | ascii_upcase | capture("^ADR0*(?<n>[0-9]{1,4})$").n' "$WORK/votes.json")
+  [[ ${#nums[@]} -gt 0 ]] && refresh_adrs "${nums[@]}"
+  local tmp
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  jq -c --argjson now "$(date +%s)" --slurpfile adrs <(cat "$ADRS" 2>/dev/null || echo '{}') '
+    . + {fetchedAt: $now, adrs: ($adrs[0].files // {} | with_entries(select(.value.title != null) | .value |= {file, title, status, summary}))}
+  ' "$WORK/votes.json" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$VOTES"
+  echo "read the votes of $(jq -r .active "$VOTES") active nodes"
+}
+
+cmd_votes() {
+  local sub="${1:-show}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    show) print_section votes ;;
+    fetch) votes_fetch "$@" ;;
+    *) die "votes takes show or fetch" ;;
+  esac
+}
+
+# --- Reading the summary ---------------------------------------------------
+
+require_summary() {
+  [[ -r "$SUMMARY" ]] || die "no summary yet. The plugin writes it once the Omarchy shell has loaded omathor and fetched once"
+  local at age
+  at="$(jq -r '.computedAt // 0' "$SUMMARY" 2>/dev/null || echo 0)"
+  age=$(( $(date +%s) - ${at%.*} / 1000 ))
+  (( age < 1800 )) || printf 'omathor: the summary is %d minutes old; is the shell running?\n' $((age / 60)) >&2
+}
+
+# The service writes `lines` ready to print, so the command and the panel
+# never disagree on a number.
+print_section() {
+  require_summary
+  if $JSON; then
+    jq --arg s "$1" 'if $s == "bonds" or $s == "chains" or $s == "names" or $s == "votes" or $s == "pools" then .[$s] else del(.text) end' "$SUMMARY"
+  else
+    jq -r --arg s "$1" '.text[$s] // [] | .[]' "$SUMMARY"
+  fi
+}
+
+cmd_refresh() {
+  local before
+  before="$(jq -r '.computedAt // 0' "$SUMMARY" 2>/dev/null || echo 0)"
+  cmd_fetch --full >/dev/null
+  # The service recomputes as soon as the snapshot changes.
+  local i
+  for i in $(seq 1 30); do
+    [[ "$(jq -r '.computedAt // 0' "$SUMMARY" 2>/dev/null || echo 0)" != "$before" ]] && break
+    sleep 0.2
+  done
+  print_section status
+}
+
+# With a tab, opens the panel on that tab (and leaves it open).
+cmd_panel() {
+  PATH="$PATH:${OMARCHY_PATH:-/usr/share/omarchy}/bin"
+  command -v omarchy-shell >/dev/null 2>&1 || die "omarchy-shell is not on PATH"
+  local tab="${1:-}"
+  if [[ -z "$tab" ]]; then
+    omarchy-shell shell toggle "$PLUGIN_ID" '{}' >/dev/null
+    return
+  fi
+  [[ "$tab" =~ ^(network|bonds?|names|votes|pools|chains)$ ]] || die "panel takes network, bonds, names, votes, pools or chains"
+  [[ "$tab" == bonds ]] && tab=bond
+  omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null
+  omarchy-shell "$PLUGIN_ID.panel" tab "$tab" >/dev/null
+}
+
+usage() {
+  cat <<USAGE
+Usage: omathor [--json] <command>
+
+  status     network health, churn and your bonds in a few lines
+  network    the network: churn, vaults, queue, nodes, price
+  bond       each bond address, node by node
+  chains     each connected chain: halts, last observed block, gas
+  pools      each pool: open for swaps or not, liquidity, 2% depth, volume
+  names      your THORNames: expiry, affiliate fees waiting, addresses
+  votes      node votes on mimir settings closest to passing, and ADRs
+  votes fetch [node…]
+             read the votes; the nodes given are matched locally
+  names forget <name or thor1…>
+             drop saved name data, or the record that an address was searched
+  names refresh [name…]
+             read the names again (all of them when none are given)
+  names find <thor1…>
+             ask Midgard which names an address owns; this sends the address
+  refresh    fetch now and print the status
+  fetch      read the THORNode and Midgard APIs into the snapshot
+             (--full also reads the node list, otherwise when it is older
+             than --nodes-age seconds, 30 minutes by default)
+  panel [tab]
+             open or close the panel; with a tab, open it on that tab
+
+--json prints the summary as JSON instead of text.
+
+Bond addresses, currency and endpoints are set in the panel's settings.
+Data: THORNode at gateway.liquify.com, falling back to public-thornode.nativeswap.io,
+and Midgard at gateway.liquify.com for the churn history. Fetching never sends
+your bond addresses; only names find does, when you ask for it.
+USAGE
+}
+
+main() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON=true; shift ;;
+      -h|--help|help) usage; exit 0 ;;
+      *) break ;;
+    esac
+  done
+  local cmd="${1:-status}"
+  [[ $# -gt 0 ]] && shift
+  case "$cmd" in
+    status)  print_section status ;;
+    network) print_section network ;;
+    bond|bonds) print_section bonds ;;
+    chains)  print_section chains ;;
+    pools)   print_section pools ;;
+    names)   cmd_names "$@" ;;
+    votes)   cmd_votes "$@" ;;
+    refresh) cmd_refresh ;;
+    fetch)   cmd_fetch "$@" ;;
+    panel)   cmd_panel "$@" ;;
+    prepare) prepare ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

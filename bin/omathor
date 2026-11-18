@@ -102,10 +102,38 @@ midgard_base() {
 # into an error, so an endpoint cannot send us somewhere else.
 http_request() { curl -q -L --max-redirs 0 "$@"; }
 
+# The address goes to curl in its config on stdin, not as an argument: it
+# can hold a bond address or a THORName, and other local accounts can read
+# the arguments of every process.
+url_config() {
+  [[ "$1" =~ ^https?://[^[:space:][:cntrl:]\"\\]+$ ]] || die "not a usable address: refused to send it"
+  printf 'url = "%s"\n' "$1"
+}
+
 # get <base> <path>: the body, or a failure. Sizes and time are bounded.
 get() {
-  http_request -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
-    --proto '=http,https' -H 'Accept: application/json' -- "$1$2"
+  url_config "$1$2" | http_request -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
+    --proto '=http,https' -H 'Accept: application/json' -K -
+}
+
+# A list given as "-" is read from one line of stdin instead, for the same
+# reason. Sets LIST.
+read_list() {
+  LIST=()
+  if [[ $# -eq 1 && "$1" == "-" ]]; then
+    local line=""
+    IFS= read -r line || true
+    read -r -a LIST <<<"$line"
+  else
+    LIST=("$@")
+  fi
+}
+
+# names.json is changed by several commands; one at a time.
+lock_names() {
+  need flock
+  exec 9>"$STATE_DIR/.names.lock"
+  flock 9
 }
 
 # The first THORNode that answers every light request is used for all of
@@ -406,8 +434,8 @@ TRIM_NAME='{
 # get_code <base> <path> <file>: the HTTP status, with the body in <file>.
 # Unlike get, a 404 or 400 is an answer here, not a failure.
 get_code() {
-  http_request -sS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" \
-    --compressed --proto '=http,https' -H 'Accept: application/json' -o "$3" -w '%{http_code}' -- "$1$2"
+  url_config "$1$2" | http_request -sS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" \
+    --compressed --proto '=http,https' -H 'Accept: application/json' -o "$3" -w '%{http_code}' -K -
 }
 
 # The names saved in the panel, when none are given.
@@ -419,9 +447,13 @@ names_setting() {
   ' "$SHELL_JSON" 2>/dev/null || true
 }
 
-# Prints {"thor1…": ["name", …]} for each address given.
+# Prints {"thor1…": ["name", …]} for each address given. It does not record
+# the search: the panel does that with names searched, for the addresses
+# still selected when the answer arrives.
 names_find() {
   need curl; need jq
+  read_list "$@"
+  set -- "${LIST[@]}"
   [[ $# -gt 0 ]] || die "names find needs at least one thor1 address"
   local midgard addr code result='{}' found
   midgard="$(midgard_base)"
@@ -439,15 +471,15 @@ names_find() {
       404) found='[]' ;;
       *) die "Midgard answered $code" ;;
     esac
-    result="$(jq -c --arg a "$addr" --argjson f "$found" '. + {($a): $f}' <<<"$result")"
+    result="$(A="$addr" F="$found" jq -c '. + {(env.A): (env.F | fromjson)}' <<<"$result")"
   done
-  mark_searched "$@"
   if $JSON; then printf '%s\n' "$result"; else jq -r 'to_entries[] | .key + ": " + (if (.value | length) > 0 then (.value | join(", ")) else "no names" end)' <<<"$result"; fi
 }
 
 names_refresh() {
   need curl; need jq
-  local names=("$@")
+  read_list "$@"
+  local names=("${LIST[@]}")
   if [[ ${#names[@]} -eq 0 ]]; then
     mapfile -t names < <(names_setting)
   fi
@@ -466,10 +498,10 @@ names_refresh() {
     for base in "${bases[@]}"; do
       code="$(get_code "$base" "/thorchain/thorname/$name" "$WORK/body" 2>/dev/null)" || continue
       if [[ "$code" == 200 ]]; then
-        got="$(jq -c --arg n "$name" "$TRIM_NAME"' + {name: $n, found: true}' "$WORK/body" 2>/dev/null)" && break
+        got="$(N="$name" jq -c "$TRIM_NAME"' + {name: env.N, found: true}' "$WORK/body" 2>/dev/null)" && break
         got=""
       elif [[ "$code" == 400 ]] && grep -q "doesn't exist" "$WORK/body"; then
-        got="$(jq -nc --arg n "$name" '{name: $n, found: false}')"
+        got="$(N="$name" jq -nc '{name: env.N, found: false}')"
         break
       fi
     done
@@ -477,7 +509,7 @@ names_refresh() {
       printf '%s\n' "$got" >> "$WORK/results"
     else
       failed=$((failed + 1))
-      jq -nc --arg n "$name" '{name: $n, failed: true}' >> "$WORK/results"
+      N="$name" jq -nc '{name: env.N, failed: true}' >> "$WORK/results"
     fi
   done
   write_names "$WORK/results"
@@ -489,20 +521,29 @@ names_refresh() {
 
 # Records that these addresses were searched, so the plugin searches each
 # address only once.
-mark_searched() {
+names_searched() {
+  need jq
+  read_list "$@"
+  set -- "${LIST[@]}"
+  local a
+  for a in "$@"; do valid_address "$a" || die "not a THORChain address: $a"; done
+  [[ $# -gt 0 ]] || return 0
+  prepare
+  lock_names
   local tmp old="$NAMES"
   [[ -r "$old" ]] && jq -e . "$old" >/dev/null 2>&1 || old=/dev/null
   tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
-  jq -n --argjson now "$(date +%s)" --slurpfile old <(cat "$old" 2>/dev/null || echo '{}') '
+  LIST="$*" jq -n --argjson now "$(date +%s)" --slurpfile old <(cat "$old" 2>/dev/null || echo '{}') '
     ($old[0] // {}) as $o
-    | {version: 1, items: ($o.items // {}), searched: (reduce $ARGS.positional[] as $a (($o.searched // {}); .[$a] = $now))}
-  ' --args "$@" > "$tmp"
+    | {version: 1, items: ($o.items // {}), searched: (reduce (env.LIST | split(" ") | .[] | select(. != "")) as $a (($o.searched // {}); .[$a] = $now))}
+  ' > "$tmp"
   chmod 600 "$tmp"
   mv -f "$tmp" "$NAMES"
 }
 
 # A name that could not be read keeps what was read before, with the error.
 write_names() {
+  lock_names
   local tmp old="$NAMES"
   [[ -r "$old" ]] && jq -e . "$old" >/dev/null 2>&1 || old=/dev/null
   tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
@@ -519,16 +560,19 @@ write_names() {
 
 names_forget() {
   need jq
+  read_list "$@"
+  set -- "${LIST[@]}"
   [[ -r "$NAMES" ]] || return 0
+  lock_names
   local tmp
   tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
   # Names and addresses alike: a forgotten address is searched again if it
   # is added back.
-  jq --args '
-    ($ARGS.positional) as $gone
+  GONE="$*" jq '
+    (env.GONE | split(" ") | map(select(. != ""))) as $gone
     | .items |= with_entries(select(.key as $k | $gone | index($k) | not))
     | .searched = ((.searched // {}) | with_entries(select(.key as $k | $gone | index($k) | not)))
-  ' "$@" < "$NAMES" > "$tmp"
+  ' < "$NAMES" > "$tmp"
   chmod 600 "$tmp"
   mv -f "$tmp" "$NAMES"
 }
@@ -541,7 +585,8 @@ cmd_names() {
     find) names_find "$@" ;;
     refresh) names_refresh "$@" ;;
     forget) names_forget "$@" ;;
-    *) die "names takes show, find, refresh or forget" ;;
+    searched) names_searched "$@" ;;
+    *) die "names takes show, find, refresh, forget or searched" ;;
   esac
 }
 
@@ -555,7 +600,7 @@ TRIM_VOTES='
   ($active[0] // []) as $act
   | ($act | length) as $n
   | (reduce $act[] as $a ({}; .[$a] = true)) as $isActive
-  | ($ARGS.positional) as $mine
+  | (env.MINE | split(" ") | map(select(. != ""))) as $mine
   | [ (.mimirs // [])[]? | select(type == "object") | {
         key: (.key // "" | tostring | .[0:80]),
         value: (.value | tonumber? // 0),
@@ -641,6 +686,8 @@ refresh_adrs() {
 
 votes_fetch() {
   need curl; need jq
+  read_list "$@"
+  set -- "${LIST[@]}"
   local node
   for node in "$@"; do valid_address "$node" || die "not a node address: $node"; done
   # A plain assignment, so a refused address stops the command here.
@@ -655,7 +702,7 @@ votes_fetch() {
   jq -c 'with_entries(select(.key | test("^[A-Za-z0-9-]{1,80}$")) | .value |= (tonumber? // 0))' "$WORK/consensus.raw" > "$WORK/consensus.json" 2>/dev/null \
     || die "$BASE sent a node mimir that is not JSON"
   get "$BASE" /thorchain/mimir/nodes_all > "$WORK/all.raw" || die "$BASE did not answer for the node votes"
-  jq -c --slurpfile active "$WORK/active.json" --slurpfile consensus "$WORK/consensus.json" "$TRIM_VOTES" --args "$@" < "$WORK/all.raw" > "$WORK/votes.json" 2>/dev/null \
+  MINE="$*" jq -c --slurpfile active "$WORK/active.json" --slurpfile consensus "$WORK/consensus.json" "$TRIM_VOTES" < "$WORK/all.raw" > "$WORK/votes.json" 2>/dev/null \
     || die "$BASE sent node votes that are not JSON"
   rm -f "$WORK/all.raw"
   local nums
@@ -749,6 +796,11 @@ Usage: omathor [--json] <command>
              read the names again (all of them when none are given)
   names find <thor1…>
              ask Midgard which names an address owns; this sends the address
+  names searched <thor1…>
+             record that an address was searched, so the panel does not ask again
+
+A list of nodes, names or addresses can be given as - and then comes from one
+line of stdin, space-separated, so it does not show in the process list.
   refresh    fetch now and print the status
   fetch      read the THORNode and Midgard APIs into the snapshot
              (--full also reads the node list, otherwise when it is older

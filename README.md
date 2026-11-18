@@ -187,6 +187,13 @@ omathor panel [tab]  open or close the panel; with a tab (network, bonds,
 omathor --json ...   the same as JSON
 ```
 
+A list of nodes, names or addresses can also be given as `-`, followed by one
+line of them on stdin, so it does not show in the process list:
+
+```sh
+echo thor1... | omathor names find -
+```
+
 The panel's service computes the summary, so the command prints what the
 panel shows. The plugin has to be loaded for the summary to update.
 
@@ -216,7 +223,12 @@ redirects. They ignore your curl configuration (`~/.curlrc`), so a setting
 there cannot make them follow a redirect or skip the certificate check.
 Responses are trimmed to the fields the plugin uses before they
 are saved, and every value is cleaned before it is shown. THORNames are read
-only as described under [THORNames](#thornames). Your own THORNode
+only as described under [THORNames](#thornames). Bond and node addresses and
+THORNames never appear in a process's arguments, where other accounts on
+the computer could read them: the panel hands them to `omathor` on stdin,
+and request addresses reach `curl` in its configuration on stdin. An address
+removed from the settings is not looked up any more, and a lookup that was
+already running for it leaves no record behind. Your own THORNode
 and Midgard can be set in the settings: https, or plain http only to this
 computer or a private network.
 
@@ -233,9 +245,12 @@ omarchy plugin remove io.github.sette7blo.omathor
 From a clone, run `./uninstall.sh` in the clone instead.
 
 The uninstaller turns the plugin off, which drops its bar entry and with it
-the settings (your bond addresses, THORNames, endpoints), removes the
-`omathor` command and launcher links that point into the plugin, and deletes
-everything omathor saved in `~/.local/state/omarchy/omathor/`:
+the settings (your bond addresses, THORNames, endpoints), stops any omathor
+command still running, removes the `omathor` command and launcher links that
+point into the plugin, and deletes everything omathor saved in
+`~/.local/state/omarchy/omathor/`. If something could not be stopped or wrote
+to that folder again, it says so and exits with an error: run it again. The
+folder holds:
 
 | File | What it holds |
 |---|---|

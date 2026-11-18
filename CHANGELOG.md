@@ -6,6 +6,24 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- Bond and node addresses and THORNames no longer appear in process arguments, where
+  other accounts on the computer can read them. The panel passes them to `omathor` on
+  stdin (`names find -`, `names refresh -`, `names forget -`, `votes fetch -`), request
+  addresses go to `curl` in its configuration on stdin, and `jq` gets them from the
+  environment.
+- An address removed from the settings is no longer looked up: a lookup waiting in the
+  queue is dropped, and each one is checked against the selection before it is sent.
+  A lookup already running when the address is removed adds no names and leaves no
+  record. `names find` no longer records the search itself; the panel records it with the
+  new `names searched`, through one queue with the other changes to `names.json`, which
+  the commands also lock while they change it.
+
+### Fixed
+- `uninstall.sh` stops the plugin's running commands (and the `curl` and `jq` they
+  started) instead of waiting up to 90 seconds, and exits with an error, instead of
+  reporting success, if one could not be stopped or the data folder was written again.
+
 ## [v0.1.4] - 2026-11-18
 
 ### Security

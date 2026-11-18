@@ -18,17 +18,51 @@ STATE_DIR="$STATE_HOME/omarchy/omathor"
 
 log() { printf '[omathor] %s\n' "$*"; }
 
-# True while a command of this plugin runs (a refresh, a name lookup), by the
-# plugin's own bin/omathor in its arguments, through a link or not.
-cli_running() {
-  local own f arg
+# The plugin's own commands still running (a refresh, a name lookup), found
+# by the plugin's bin/omathor among their arguments, through a link or not,
+# and every process they started (curl, jq): everything that can still write.
+writer_pids() {
+  local own f arg pid p pp changed=1
+  local -A found=()
   own="$(readlink -f "$PROJECT_DIR/bin/omathor")"
   for f in /proc/[0-9]*/cmdline; do
-    [[ "${f#/proc/}" == "$$/cmdline" ]] && continue
+    pid="${f#/proc/}"
+    pid="${pid%/cmdline}"
+    [[ "$pid" == "$$" ]] && continue
     while IFS= read -r -d '' arg; do
       [[ "$arg" == */bin/omathor ]] || continue
-      [[ "$(readlink -f "$arg" 2>/dev/null)" == "$own" ]] && return 0
+      [[ "$(readlink -f "$arg" 2>/dev/null)" == "$own" ]] && { found[$pid]=1; break; }
     done < "$f" 2>/dev/null
+  done
+  (( ${#found[@]} )) || return 0
+  local table
+  table="$(ps -e -o pid=,ppid=)"
+  while (( changed )); do
+    changed=0
+    while read -r p pp; do
+      [[ -n "${found[$pp]:-}" && -z "${found[$p]:-}" ]] && { found[$p]=1; changed=1; }
+    done <<<"$table"
+  done
+  printf '%s\n' "${!found[@]}"
+}
+
+# Stops them: TERM, then KILL what is left. Fails only if something survives.
+stop_writers() {
+  local -a pids
+  local i
+  mapfile -t pids < <(writer_pids)
+  (( ${#pids[@]} )) || return 0
+  log "stopping the plugin's running commands"
+  kill -TERM "${pids[@]}" 2>/dev/null || true
+  for ((i = 0; i < 50; i++)); do
+    [[ -z "$(writer_pids)" ]] && return 0
+    sleep 0.1
+  done
+  mapfile -t pids < <(writer_pids)
+  (( ${#pids[@]} )) && kill -KILL "${pids[@]}" 2>/dev/null
+  for ((i = 0; i < 20; i++)); do
+    [[ -z "$(writer_pids)" ]] && return 0
+    sleep 0.1
   done
   return 1
 }
@@ -54,18 +88,23 @@ remove_link "$PLUGIN_LINK"
 remove_link "$CLI_LINK"
 remove_link "$DESKTOP_LINK"
 
-# Disabling stops the background service, but a refresh it already started
-# would write its result after the folder is gone. Each request is capped at
-# 25 seconds; after 90 the folder is removed regardless.
-for ((i = 0; i < 90; i++)); do
-  cli_running || break
-  (( i == 0 )) && log "waiting for a running refresh to finish"
-  sleep 1
-done
+# Disabling stops the background service, but a command it already started
+# (a refresh, a name lookup) would write after the folder is gone, and its
+# error handler creates the folder again. So those are stopped first, and the
+# uninstaller fails, rather than report success, if anything is still writing.
+if ! stop_writers; then
+  log "a running omathor command could not be stopped; $STATE_DIR was left. Run this again."
+  exit 1
+fi
 
 if [[ -d "$STATE_DIR" ]]; then
   rm -rf "$STATE_DIR"
   log "removed $STATE_DIR"
+fi
+sleep 1
+if [[ -e "$STATE_DIR" || -n "$(writer_pids)" ]]; then
+  log "something wrote to $STATE_DIR again while it was removed. Run this again."
+  exit 1
 fi
 
 if command -v omarchy-shell >/dev/null 2>&1; then

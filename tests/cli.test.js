@@ -13,12 +13,12 @@ const ME = "thor1mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
 
 let server, base, tmp, env
 
-function run(args, extraEnv) {
-  const out = spawnSync(CLI, args, { env: Object.assign({}, env, extraEnv || {}), encoding: "utf8", timeout: 60000 })
+function run(args, extraEnv, input) {
+  const out = spawnSync(CLI, args, { env: Object.assign({}, env, extraEnv || {}), input: input || "", encoding: "utf8", timeout: 60000 })
   return { code: out.status, out: out.stdout.trim(), err: out.stderr.trim() }
 }
-function ok(args, extraEnv) {
-  const r = run(args, extraEnv)
+function ok(args, extraEnv, input) {
+  const r = run(args, extraEnv, input)
   assert.equal(r.code, 0, args.join(" ") + ": " + r.err)
   return r.out
 }
@@ -160,10 +160,14 @@ test("names find asks Midgard by address and keeps only valid names", function()
   assert.deepEqual(out, { [ME]: ["mine"] })
   const none = JSON.parse(ok(["--json", "names", "find", "thor1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"]))
   assert.deepEqual(none, { thor1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq: [] })
-  // Searched addresses are recorded, so the plugin searches each once.
+  // A search is not recorded by find: the panel records it with names
+  // searched, for the addresses still selected when the answer arrives.
+  assert.equal(fs.existsSync(path.join(stateDir(), "names.json")), false)
+  ok(["names", "searched", "-"], null, ME + " thor1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\n")
   const data = JSON.parse(fs.readFileSync(path.join(stateDir(), "names.json"), "utf8"))
   assert.deepEqual(Object.keys(data.searched).sort(), [ME, "thor1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"])
   assert.notEqual(run(["names", "find", "thor1short"]).code, 0)
+  assert.notEqual(run(["names", "searched", "-"], null, "thor1short\n").code, 0)
 })
 
 test("names refresh saves each name, private and trimmed", async function() {
@@ -248,8 +252,37 @@ test("a curl config cannot make a request follow a redirect", async function() {
   assert.deepEqual(log.filter(function(p) { return p.indexOf("/landed/") === 0 }), [])
 })
 
+test("lookups take their addresses and names from stdin, and none reach a process argument", async function() {
+  // Stand-ins for curl and jq that log their arguments, then run the real ones.
+  const bin = path.join(tmp, "argv-bin")
+  const log = path.join(tmp, "argv.log")
+  fs.mkdirSync(bin, { recursive: true })
+  for (const tool of ["curl", "jq"]) {
+    const real = spawnSync("sh", ["-c", "command -v " + tool], { encoding: "utf8" }).stdout.trim()
+    fs.writeFileSync(path.join(bin, tool), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\nexec '" + real + "' \"$@\"\n", { mode: 0o755 })
+  }
+  const logged = { PATH: bin + ":" + process.env.PATH }
+  const before = (await requests()).length
+  assert.deepEqual(JSON.parse(ok(["--json", "names", "find", "-"], logged, ME + "\n")), { [ME]: ["mine"] })
+  ok(["names", "refresh", "-"], logged, "mine gone\n")
+  ok(["names", "searched", "-"], logged, ME + "\n")
+  ok(["names", "forget", "-"], logged, "gone " + ME + "\n")
+  ok(["votes", "fetch", "-"], Object.assign({ OMATHOR_GITLAB: base }, logged), "thor1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+  const sent = (await requests()).slice(before)
+  assert.ok(sent.indexOf("/v2/thorname/owner/" + ME) !== -1, "the lookup still asks Midgard for the address")
+  assert.ok(sent.indexOf("/thorchain/thorname/mine") !== -1)
+  const argv = fs.readFileSync(log, "utf8")
+  assert.ok(argv.length > 0)
+  for (const secret of [ME, "thor1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "/thorname/mine", "/thorname/gone"]) {
+    const at = argv.indexOf(secret)
+    assert.equal(at, -1, secret + " showed up in a curl or jq argument: " + argv.slice(Math.max(0, at - 200), at + 60))
+  }
+  // The names as arguments of their own (the jq programs mention $mine).
+  assert.doesNotMatch(argv, /(^| )(mine|gone)( |$)/m)
+})
+
 // Last: it removes the saved data the tests above rely on.
-test("uninstall waits for a running refresh before it removes the saved data", async function() {
+test("uninstall stops a running refresh before it removes the saved data", async function() {
   ok(["fetch"])
   assert.ok(fs.existsSync(stateDir()))
   await setMode("slow")
@@ -263,9 +296,13 @@ test("uninstall waits for a running refresh before it removes the saved data", a
   })
   await finished
   await setMode("ok")
-  assert.equal(un.status, 0, un.stderr)
-  assert.match(un.stdout, /waiting for a running refresh to finish/)
-  assert.equal(fetching.exitCode, 0)
+  assert.equal(un.status, 0, un.stdout + un.stderr)
+  assert.match(un.stdout, /stopping the plugin's running commands/)
+  // Stopped, not waited for: a full fetch here takes far longer than this.
+  assert.notEqual(fetching.exitCode, 0)
+  await new Promise(function(done) { setTimeout(done, 1500) })
   assert.equal(fs.existsSync(stateDir()), false)
+  const left = spawnSync("sh", ["-c", "ps -e -o args= | grep -F -- '" + CLI + "' | grep -v grep || true"], { encoding: "utf8" }).stdout
+  assert.equal(left.trim(), "")
 })
 

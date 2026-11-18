@@ -179,13 +179,19 @@ Item {
     if (votesProc.running) return
     if (!force && !Model.votesDue(root.votesData, Date.now())) return
     root.votesError = ""
-    votesProc.command = [root.cli, "votes", "fetch"].concat(Model.voteNodes(root.summary))
+    votesProc.payload = Model.voteNodes(root.summary).join(" ")
+    votesProc.command = [root.cli, "votes", "fetch", "-"]
     votesProc.running = true
   }
 
+  // Node and bond addresses and THORNames go to the command on stdin, never
+  // as arguments: other local accounts can read every process's arguments.
   Process {
     id: votesProc
+    property string payload: ""
     running: false
+    stdinEnabled: true
+    onRunningChanged: if (running) { votesProc.write(votesProc.payload + "\n"); votesProc.payload = "" }
     stderr: StdioCollector { id: votesErr; waitForEnd: true }
     onExited: function(code) {
       if (code !== 0) root.votesError = Model.errorText(votesErr.text) || "Reading the votes failed."
@@ -234,7 +240,13 @@ Item {
     delete tried[address]
     root.tried = tried
     root.persistSettings({ addresses: next.addresses, names: next.names })
+    // A lookup still waiting for its turn is not sent any more.
+    root.findQueue = root.findQueue.filter(function(a) { return a !== address })
     root.forgetNames([address])
+  }
+
+  function selected(address) {
+    return root.options.addresses.indexOf(address) !== -1
   }
 
   // Each bond address is searched for names once: when it is added, or the
@@ -257,9 +269,10 @@ Item {
     root.forgetNames()
   }
 
-  // Sends the addresses to Midgard: only from adding one or Find names.
+  // Sends the addresses to Midgard: only from adding one or Find names. Each
+  // is checked against the current selection again when its turn comes.
   function findNames(addresses) {
-    var list = (addresses || []).filter(function(a) { return Model.isAddress(a) })
+    var list = (addresses || []).filter(function(a) { return Model.isAddress(a) && root.selected(a) })
     if (!list.length) return
     var tried = root.tried
     for (var i = 0; i < list.length; i++) tried[list[i]] = true
@@ -270,7 +283,7 @@ Item {
     }
     root.namesError = ""
     findProc.asked = list
-    findProc.command = [root.cli, "--json", "names", "find"].concat(list)
+    findProc.command = [root.cli, "--json", "names", "find", "-"]
     findProc.running = true
   }
 
@@ -282,7 +295,8 @@ Item {
       return
     }
     root.namesError = ""
-    namesProc.command = [root.cli, "names", "refresh"].concat(list)
+    namesProc.asked = list
+    namesProc.command = [root.cli, "names", "refresh", "-"]
     namesProc.running = true
   }
 
@@ -294,13 +308,50 @@ Item {
   // record that a removed address was searched.
   function forgetNames(addresses) {
     var gone = Model.namesToForget(root.options, root.namesData).concat(addresses || [])
-    if (gone.length) Util.execArgv([root.cli, "names", "forget"].concat(gone))
+    if (gone.length) root.writeNames("forget", gone)
+  }
+
+  // Every change to names.json made from here goes through one queue, in
+  // order, so a search recorded for an address cannot land after the
+  // address was removed and its record forgotten. A record of searched
+  // addresses is checked against the selection when its turn comes.
+  property var writeQueue: []
+
+  function writeNames(op, list) {
+    root.writeQueue = root.writeQueue.concat([{ op: op, list: list }])
+    root.nextWrite()
+  }
+
+  function nextWrite() {
+    while (!writeProc.running && root.writeQueue.length) {
+      var job = root.writeQueue[0]
+      root.writeQueue = root.writeQueue.slice(1)
+      var list = job.op === "searched" ? job.list.filter(function(a) { return root.selected(a) }) : job.list
+      if (!list.length) continue
+      writeProc.payload = list.join(" ")
+      writeProc.command = [root.cli, "names", job.op, "-"]
+      writeProc.running = true
+    }
+  }
+
+  Process {
+    id: writeProc
+    property string payload: ""
+    running: false
+    stdinEnabled: true
+    onRunningChanged: if (running) { writeProc.write(writeProc.payload + "\n"); writeProc.payload = "" }
+    onExited: {
+      namesFile.reload()
+      root.nextWrite()
+    }
   }
 
   Process {
     id: findProc
     property var asked: []
     running: false
+    stdinEnabled: true
+    onRunningChanged: if (running) findProc.write(findProc.asked.join(" ") + "\n")
     stdout: StdioCollector { id: findOut; waitForEnd: true }
     stderr: StdioCollector { id: findErr; waitForEnd: true }
     onExited: function(code) {
@@ -308,14 +359,18 @@ Item {
       if (!found || typeof found !== "object") {
         root.namesError = Model.errorText(findErr.text) || "The name search failed."
       } else {
+        // An address removed while it was being looked up is left out: its
+        // names are not added and its search is not recorded.
+        var still = findProc.asked.filter(function(a) { return root.selected(a) })
         var current = root.options
         var added = []
-        for (var i = 0; i < findProc.asked.length; i++) {
-          var r = Model.setFoundNames(current, findProc.asked[i], found[findProc.asked[i]])
+        for (var i = 0; i < still.length; i++) {
+          var r = Model.setFoundNames(current, still[i], found[still[i]])
           current = r.options
           added = added.concat(r.added)
         }
         root.persistSettings({ names: current.names })
+        root.writeNames("searched", still)
         root.forgetNames()
         root.refreshNames(added)
       }
@@ -327,10 +382,17 @@ Item {
 
   Process {
     id: namesProc
+    property var asked: []
     running: false
+    stdinEnabled: true
+    onRunningChanged: if (running) namesProc.write(namesProc.asked.join(" ") + "\n")
     stderr: StdioCollector { id: namesErr; waitForEnd: true }
     onExited: function(code) {
       if (code !== 0) root.namesError = Model.errorText(namesErr.text) || "The name refresh failed."
+      // A name removed while it was being read is dropped again.
+      var kept = root.options.names.map(function(n) { return n.name })
+      var dropped = namesProc.asked.filter(function(n) { return kept.indexOf(n) === -1 })
+      if (dropped.length) root.writeNames("forget", dropped)
       namesFile.reload()
       var queued = root.refreshQueue
       root.refreshQueue = []

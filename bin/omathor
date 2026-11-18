@@ -126,18 +126,23 @@ pick_base() {
 # Only the fields the plugin reads are kept, so the snapshot stays small and
 # anything unexpected in a response never reaches the UI.
 
+# Node addresses become lookup keys in the panel, so a node whose address is
+# not a plain thor1 address is dropped. Operator and bond provider addresses
+# are only compared, and include contract addresses (thor1 with 58 characters)
+# and other chains, so they need only the bech32 shape; anything else is "".
 TRIM_NODES='
   def num: (tonumber? // 0);
   def s($n): (. // "" | tostring | .[0:$n]);
-  [ .[] | select(type == "object") | {
-      address: (.node_address | s(80)),
+  def bech32: (. // "" | tostring | if test("^[a-z]{1,16}1[02-9ac-hj-np-z]{6,90}$") then . else "" end);
+  [ .[] | select(type == "object" and ((.node_address // "") | type == "string" and test("^thor1[02-9ac-hj-np-z]{38}$"))) | {
+      address: .node_address,
       status: (.status | s(20)),
-      operator: (.node_operator_address | s(80)),
+      operator: (.node_operator_address | bech32),
       bond: (.total_bond | num),
       fee: (.bond_providers.node_operator_fee | num),
       # Every provider is kept: the limit is a mimir value (MAXBONDPROVIDERS) that can rise,
       # and the download itself is size-capped.
-      providers: [ (.bond_providers.providers // [])[] | { address: (.bond_address | s(80)), bond: (.bond | num) } ],
+      providers: [ (.bond_providers.providers // [])[] | select(type == "object") | { address: (.bond_address | bech32), bond: (.bond | num) } | select(.address != "") ],
       slash: (.slash_points | num),
       jailUntil: (.jail.release_height | num),
       jailReason: (.jail.reason | s(80)),

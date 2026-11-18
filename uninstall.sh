@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Reverses install.sh: removes the symlinks and the saved snapshot and
-# summary. The settings in shell.json go with the bar entry.
+# Reverses install.sh: removes the symlinks and everything saved in
+# ~/.local/state/omarchy/omathor (snapshot, bond summary, THORNames, votes).
+# The settings in shell.json go with the bar entry when the plugin is disabled.
+# omarchy plugin remove does not run this, so run it first.
 
 set -euo pipefail
 
@@ -15,6 +17,21 @@ DESKTOP_LINK="$DATA_HOME/applications/omathor.desktop"
 STATE_DIR="$STATE_HOME/omarchy/omathor"
 
 log() { printf '[omathor] %s\n' "$*"; }
+
+# True while a command of this plugin runs (a refresh, a name lookup), by the
+# plugin's own bin/omathor in its arguments, through a link or not.
+cli_running() {
+  local own f arg
+  own="$(readlink -f "$PROJECT_DIR/bin/omathor")"
+  for f in /proc/[0-9]*/cmdline; do
+    [[ "${f#/proc/}" == "$$/cmdline" ]] && continue
+    while IFS= read -r -d '' arg; do
+      [[ "$arg" == */bin/omathor ]] || continue
+      [[ "$(readlink -f "$arg" 2>/dev/null)" == "$own" ]] && return 0
+    done < "$f" 2>/dev/null
+  done
+  return 1
+}
 
 # Removes only links that point into this plugin; a command or launcher of the
 # same name from somewhere else stays.
@@ -36,6 +53,15 @@ fi
 remove_link "$PLUGIN_LINK"
 remove_link "$CLI_LINK"
 remove_link "$DESKTOP_LINK"
+
+# Disabling stops the background service, but a refresh it already started
+# would write its result after the folder is gone. Each request is capped at
+# 25 seconds; after 90 the folder is removed regardless.
+for ((i = 0; i < 90; i++)); do
+  cli_running || break
+  (( i == 0 )) && log "waiting for a running refresh to finish"
+  sleep 1
+done
 
 if [[ -d "$STATE_DIR" ]]; then
   rm -rf "$STATE_DIR"

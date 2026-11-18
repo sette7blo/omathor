@@ -6,6 +6,23 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- Node addresses from THORNode are checked on import: a node whose address is not a plain
+  `thor1` address is dropped, also from a snapshot saved by an earlier version. Operator
+  and bond provider addresses must have the bech32 form (contract addresses, which bond
+  too, are kept). Every lookup table keyed by outside text (nodes, chains, versions,
+  THORNames) has no inherited keys, so a key such as `__proto__` or `constructor` can
+  neither change other objects nor stop the notifications.
+
+### Fixed
+- `uninstall.sh` waits for a refresh that is still running before it deletes the saved
+  data, so the refresh cannot write it back.
+
+### Changed
+- The README says that `omarchy plugin remove` does not run the uninstaller, lists what
+  omathor keeps in `~/.local/state/omarchy/omathor/`, and shows how to run the
+  uninstaller first, or clean up by hand after a removal without it.
+
 ## [v0.1.3] - 2026-11-18
 
 ### Security

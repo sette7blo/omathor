@@ -4,10 +4,17 @@
 const http = require("node:http")
 
 const NODE_A = "thor1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-const NODE_B = "thor1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const NODE_B = "thor1eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 const ME = "thor1mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
 
 let mode = "ok"
+
+// i as three characters of the bech32 alphabet, so every made-up address is
+// one THORNode could return.
+function bech32Index(i) {
+  const abc = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+  return abc[Math.floor(i / 1024) % 32] + abc[Math.floor(i / 32) % 32] + abc[i % 32]
+}
 const log = []
 
 function node(address, status, bond, providers, extra) {
@@ -54,10 +61,20 @@ const routes = {
     // provider entry has nothing bonded.
     node("thor1cccccccccccccccccccccccccccccccccccccc", "Active", 2600000000000,
       Array.from({ length: 600 }, function(_, i) {
-        return { bond_address: i === 599 ? ME : "thor1" + String(i).padStart(3, "0") + "d".repeat(35), bond: i === 599 ? 100000000000 : 36000000000 }
+        return { bond_address: i === 599 ? ME : "thor1" + bech32Index(i) + "d".repeat(35), bond: i === 599 ? 100000000000 : 36000000000 }
       })),
     node("thor1dddddddddddddddddddddddddddddddddddddd", "Active", 100000000000, [{ bond_address: "thor1dddddddddddddddddddddddddddddddddddddd", bond: 100000000000 }, { bond_address: ME, bond: 0 }]),
-    node(NODE_B, "Standby", 50000000000, [{ bond_address: NODE_B, bond: 50000000000 }], { preflight_status: { status: "Standby", reason: "not enough bond", code: 1 } })
+    node(NODE_B, "Standby", 50000000000, [{ bond_address: NODE_B, bond: 50000000000 }], { preflight_status: { status: "Standby", reason: "not enough bond", code: 1 } }),
+    // Node ids no real node has: dropped on import, whatever else they carry.
+    node("__proto__", "Active", 1, [{ bond_address: ME, bond: 1 }]),
+    node("constructor", "Active", 1, [{ bond_address: ME, bond: 1 }]),
+    node("thor1" + "b".repeat(38), "Active", 1, [{ bond_address: ME, bond: 1 }]),
+    node(NODE_A.toUpperCase(), "Active", 1, [{ bond_address: ME, bond: 1 }]),
+    // A contract among the providers and a provider address that is not bech32.
+    node("thor1gggggggggggggggggggggggggggggggggggggg", "Standby", 1, [
+      { bond_address: "thor1enhmz57mpn4umspa8hqgqwwqpe02q4hpqmqr0k2zftxr8fu3nxmqjy3tqx", bond: 1 },
+      { bond_address: "constructor", bond: 1 }
+    ])
   ],
   "/thorchain/constants": { int_64_values: { ChurnInterval: 43200, DesiredValidatorSet: 100 } },
   "/thorchain/upgrade_proposals": [{ name: "3.22.0", height: 60000, info: "x".repeat(500), approved: false, approved_percent: "0.4", validators_to_quorum: 20, approvers: ["thor1x"] }],
@@ -111,6 +128,13 @@ const server = http.createServer(function(req, res) {
     let body = ""
     req.on("data", function(d) { body += d })
     req.on("end", function() { mode = body.trim(); res.end("ok") })
+    return
+  }
+  // "slow" answers each request a second late, so a fetch is still running
+  // while the test does something else.
+  if (mode === "slow" && !req.slowed) {
+    req.slowed = true
+    setTimeout(function() { server.emit("request", req, res) }, 1000)
     return
   }
   log.push(url.pathname)

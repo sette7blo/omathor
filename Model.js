@@ -49,10 +49,19 @@ function worse(a, b) {
 
 // ----- Addresses -----
 
-// A THORChain account: bech32 with the thor prefix. Contract addresses are
-// longer, and bonds never come from one.
+// A THORChain account: bech32 with the thor prefix. Every node address has
+// this form. Contract addresses are longer; some bond to nodes, but they are
+// never entered as your own address.
 function isAddress(value) {
   return /^thor1[02-9ac-hj-np-z]{38}$/.test(String(value || ""))
+}
+
+// A lookup table keyed by text from outside (node addresses, chains, names,
+// versions). It has no prototype, so a key such as __proto__ or constructor is
+// an ordinary entry: it can neither write to the prototype every object
+// shares nor be found as an inherited property.
+function dict() {
+  return Object.create(null)
 }
 
 function cleanAddress(value) {
@@ -103,7 +112,7 @@ function settings(raw) {
   // A name found through a bond address carries that address as `owner`;
   // a name typed in by hand has none.
   var names = []
-  var seen = {}
+  var seen = dict()
   var nameList = Array.isArray(data.names) ? data.names : []
   for (var n = 0; n < nameList.length && names.length < MAX_NAMES; n++) {
     var entry = nameList[n] && typeof nameList[n] === "object" ? nameList[n] : { name: nameList[n] }
@@ -197,12 +206,12 @@ function setFoundNames(options, owner, found) {
   var current = settings(options)
   if (current.addresses.indexOf(owner) === -1) return { options: current, added: [] }
   var list = []
-  var seen = {}
+  var seen = dict()
   for (var f = 0; f < (Array.isArray(found) ? found.length : 0); f++) {
     var nm = cleanName(found[f])
     if (isName(nm) && !seen[nm]) { seen[nm] = true; list.push(nm) }
   }
-  var had = {}
+  var had = dict()
   var kept = []
   for (var i = 0; i < current.names.length; i++) {
     var n = current.names[i]
@@ -243,7 +252,7 @@ function namesDue(options, namesData, nowMs) {
 function namesToSearch(options, namesData, tried) {
   var o = settings(options)
   var searched = namesData && namesData.searched && typeof namesData.searched === "object" ? namesData.searched : {}
-  var done = tried || {}
+  var done = tried || dict()
   return o.addresses.filter(function(a) { return !searched[a] && !done[a] })
 }
 
@@ -251,7 +260,7 @@ function namesToSearch(options, namesData, tried) {
 function namesToForget(options, namesData) {
   var o = settings(options)
   var items = namesData && namesData.items && typeof namesData.items === "object" ? namesData.items : {}
-  var keep = {}
+  var keep = dict()
   for (var i = 0; i < o.names.length; i++) keep[o.names[i].name] = true
   return Object.keys(items).filter(function(k) { return !keep[k] && isName(k) })
 }
@@ -424,7 +433,7 @@ function chainInfo(snap, height) {
   var mimir = snap.mimir || {}
   var inbound = Array.isArray(snap.inbound) ? snap.inbound : []
   var last = Array.isArray(snap.lastblock) ? snap.lastblock : []
-  var observed = {}
+  var observed = dict()
   for (var i = 0; i < last.length; i++) observed[last[i].chain] = last[i]
   var out = []
   for (var j = 0; j < inbound.length; j++) {
@@ -472,10 +481,11 @@ function churnRanks(active) {
   var byAge = active.slice().sort(function(a, b) { return num(a.activeSince) - num(b.activeSince) })
   var bySlash = active.slice().sort(function(a, b) { return num(b.slash) - num(a.slash) })
   var byBond = active.slice().sort(function(a, b) { return num(a.bond) - num(b.bond) })
-  var ranks = {}
+  var ranks = dict()
   var put = function(list, key) {
     for (var i = 0; i < list.length; i++) {
       var a = list[i].address
+      // The record itself has fixed keys and goes out to the panel: a plain object.
       ranks[a] = ranks[a] || {}
       ranks[a][key] = i + 1
     }
@@ -629,7 +639,7 @@ function cellMoney(units, currency, price) {
 // yet, and a pool on a halted or paused chain cannot be swapped either.
 function poolsFor(snap, out) {
   var list = Array.isArray(snap.pools) ? snap.pools : []
-  var chainState = {}
+  var chainState = dict()
   for (var c = 0; c < out.chains.length; c++) chainState[out.chains[c].chain] = out.chains[c].state
   var tradingHalted = out.flags && (out.flags.tradingHalted || out.flags.chainsHalted)
   var pools = []
@@ -1142,7 +1152,8 @@ function summarize(snap, options, nowMs, namesData, votesData) {
     }
   }
 
-  var nodes = Array.isArray(snap.nodes) ? snap.nodes : []
+  // A snapshot written by an earlier version may hold any address.
+  var nodes = (Array.isArray(snap.nodes) ? snap.nodes : []).filter(function(n) { return n && isAddress(n.address) })
   if (nodes.length) {
     var active = nodes.filter(function(n) { return n.status === "Active" })
     var maxVersion = ""
@@ -1156,7 +1167,7 @@ function summarize(snap, options, nowMs, namesData, votesData) {
     // Versions among active nodes. THORNode's current version is the lowest
     // of them, so the network moves on only once every active node runs the
     // newer one.
-    var byVersion = {}
+    var byVersion = dict()
     for (var vv = 0; vv < active.length; vv++) {
       var ver = text(active[vv].version, 20) || "?"
       byVersion[ver] = (byVersion[ver] || 0) + 1
@@ -1788,7 +1799,7 @@ function events(prev, next) {
     else if (b === "paused") out.push({ urgent: false, title: "Churning halted", body: "Set by the admin mimir HALTCHURNING." })
     else if (a === "paused") out.push({ urgent: false, title: "Churning resumed", body: "" })
   }
-  var before = {}
+  var before = dict()
   for (var i = 0; i < prev.chains.length; i++) before[prev.chains[i].chain] = prev.chains[i].state
   for (var j = 0; j < next.chains.length; j++) {
     var c = next.chains[j]
@@ -1797,7 +1808,7 @@ function events(prev, next) {
     if (c.state === "ok") out.push({ urgent: false, title: c.chain + " resumed", body: "" })
     else if (c.state !== "lp") out.push({ urgent: false, title: c.chain + ": " + CHAIN_STATES[c.state].toLowerCase(), body: "" })
   }
-  var nodesBefore = {}
+  var nodesBefore = dict()
   for (var p = 0; p < prev.bonds.length; p++) {
     for (var q = 0; q < prev.bonds[p].nodes.length; q++) nodesBefore[prev.bonds[p].nodes[q].node] = prev.bonds[p].nodes[q]
   }
@@ -1812,7 +1823,7 @@ function events(prev, next) {
       if (!o.leaving && n.leaving) out.push({ urgent: true, title: name + " is leaving", body: "It churns out at the next churn." })
     }
   }
-  var namesBefore = {}
+  var namesBefore = dict()
   var prevNames = Array.isArray(prev.names) ? prev.names : []
   var nextNames = Array.isArray(next.names) ? next.names : []
   for (var t = 0; t < prevNames.length; t++) namesBefore[prevNames[t].name] = prevNames[t]

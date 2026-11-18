@@ -466,7 +466,7 @@ test("security: the bond against the vaults, and where the rewards go", function
 
 test("upgrade: progress to the newest version, and proposals", function() {
   const nodes = []
-  for (let i = 0; i < 10; i++) nodes.push(node("thor1" + String(i).padStart(38, "n"), { version: i < 7 ? "3.21.5" : "3.21.3" }))
+  for (let i = 0; i < 10; i++) nodes.push(node("thor1" + "acdefghjkl"[i].padStart(38, "n"), { version: i < 7 ? "3.21.5" : "3.21.3" }))
   const s = M.summarize(snap({
     nodes: nodes,
     thorVersion: { current: "3.21.3", next: "3.21.5", nextSince: 100000 - 30000 },
@@ -497,7 +497,7 @@ test("upgrade: progress to the newest version, and proposals", function() {
 
 test("a node of yours below the required version: time left, then churn-out risk", function() {
   const mine = node(NODE, { version: "3.21.3" })
-  const others = [node(OP + "x", { version: "3.21.5" })]
+  const others = [node("thor1ffffffffffffffffffffffffffffffffffffff", { version: "3.21.5" })]
   // Raised 10,000 blocks ago: 11,600 blocks (about 19h) of grace left.
   let s = M.summarize(snap({ nodes: [mine].concat(others), thorVersion: { current: "3.21.3", next: "3.21.5", nextSince: 90000 } }), { addresses: [ME] }, NOW)
   let row = s.bonds[0].nodes[0]
@@ -511,7 +511,7 @@ test("a node of yours below the required version: time left, then churn-out risk
   assert.equal(row.level, "alert")
   assert.equal(s.level, "alert")
   // On the required version, but not the newest: only the softer note.
-  s = M.summarize(snap({ nodes: [node(NODE, { version: "3.21.5" }), node(OP + "x", { version: "3.21.6" })], thorVersion: { current: "3.21.5", next: "3.21.5", nextSince: 70000 } }), { addresses: [ME] }, NOW)
+  s = M.summarize(snap({ nodes: [node(NODE, { version: "3.21.5" }), node("thor1ffffffffffffffffffffffffffffffffffffff", { version: "3.21.6" })], thorVersion: { current: "3.21.5", next: "3.21.5", nextSince: 70000 } }), { addresses: [ME] }, NOW)
   assert.match(s.bonds[0].nodes[0].issues.join("|"), /Runs 3\.21\.5, others run 3\.21\.6/)
 })
 
@@ -610,4 +610,34 @@ test("the manifest does not promise more privacy than the code keeps", function(
   assert.doesNotMatch(manifest.description, /never leave/)
   assert.match(manifest.description, /sent only once/)
   assert.ok(manifest.description.length <= 500)
+})
+
+test("node ids from THORNode cannot reach the shared object prototype", function() {
+  const hostile = ["__proto__", "constructor", "toString", "hasOwnProperty"].map(function(a) {
+    return node(a, { providers: [{ address: ME, bond: 1e13 }] })
+  })
+  const prev = M.summarize(snap({ nodes: [node(NODE)] }), { addresses: [ME] }, NOW)
+  const next = M.summarize(snap({ nodes: [node(NODE)].concat(hostile) }), { addresses: [ME] }, NOW + 1000)
+  assert.equal(({}).age, undefined)
+  assert.equal(({}).slash, undefined)
+  assert.equal(({}).bond, undefined)
+  assert.equal(next.nodes.counts.active, prev.nodes.counts.active)
+  assert.deepEqual(next.bonds[0].nodes.map(function(n) { return n.node }), [NODE])
+  assert.deepEqual(M.events(prev, next), [])
+  // A bonded node that changes still notifies when the snapshot also carries hostile ids.
+  const jailed = M.summarize(snap({ nodes: [node(NODE, { status: "Standby" })].concat(hostile) }), { addresses: [ME] }, NOW + 2000)
+  assert.equal(M.events(prev, jailed)[0].title, "Node " + M.shortAddress(NODE) + " is standby")
+})
+
+test("lookups keyed by chain, version or name do not see inherited properties", function() {
+  const s = M.summarize(snap({ nodes: [node(NODE, { version: "__proto__" }), node(OP, { version: "constructor" })] }), { addresses: [ME] }, NOW)
+  assert.deepEqual(s.versions.map(function(v) { return v.version }).sort(), ["__proto__", "constructor"])
+  assert.equal(({}).length, undefined)
+})
+
+test("contract and other-chain addresses among bond providers are kept", function() {
+  const CONTRACT = "thor1enhmz57mpn4umspa8hqgqwwqpe02q4hpqmqr0k2zftxr8fu3nxmqjy3tqx"
+  const s = M.summarize(snap({ nodes: [node(NODE, { operator: "tbnb1zgnzmv56r2kfdh7r2zgesxcv86xrj5x52qwuvw", providers: [{ address: CONTRACT, bond: 3e13 }, { address: ME, bond: 1e13 }] })] }), { addresses: [ME] }, NOW)
+  assert.equal(s.bonds[0].nodes.length, 1)
+  assert.equal(s.bonds[0].bond, 1e13)
 })

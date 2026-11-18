@@ -57,7 +57,14 @@ test("fetch writes a private, trimmed snapshot", function() {
   assert.equal(fs.statSync(path.join(stateDir(), "snapshot.json")).mode & 0o777, 0o600)
   const snap = snapshot()
   assert.equal(snap.block.height, 50010)
-  assert.equal(snap.nodes.length, 4)
+  // Only nodes with a plain thor1 address are kept.
+  assert.deepEqual(snap.nodes.map(function(n) { return n.address }), [
+    "thor1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "thor1cccccccccccccccccccccccccccccccccccccc",
+    "thor1dddddddddddddddddddddddddddddddddddddd", "thor1eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "thor1gggggggggggggggggggggggggggggggggggggg"
+  ])
+  // Provider addresses need only the bech32 shape: the contract stays.
+  assert.deepEqual(snap.nodes[4].providers, [{ address: "thor1enhmz57mpn4umspa8hqgqwwqpe02q4hpqmqr0k2zftxr8fu3nxmqjy3tqx", bond: 1 }])
   assert.equal(snap.nodes[0].providers[1].address, ME)
   // Long provider lists are kept whole, so the last provider is still found.
   assert.equal(snap.nodes[1].providers.length, 600)
@@ -81,7 +88,7 @@ test("the node list is fetched again only when old enough or with --full", async
   ok(["fetch"])
   let after = (await requests()).filter(function(p) { return p === "/thorchain/nodes" }).length
   assert.equal(after, before)
-  assert.equal(snapshot().nodes.length, 4, "the old node list is carried over")
+  assert.equal(snapshot().nodes.length, 5, "the old node list is carried over")
   ok(["fetch", "--full"])
   after = (await requests()).filter(function(p) { return p === "/thorchain/nodes" }).length
   assert.equal(after, before + 1)
@@ -240,3 +247,25 @@ test("a curl config cannot make a request follow a redirect", async function() {
   assert.ok(log.filter(function(p) { return p.indexOf("/hop/") === 0 }).length >= 3)
   assert.deepEqual(log.filter(function(p) { return p.indexOf("/landed/") === 0 }), [])
 })
+
+// Last: it removes the saved data the tests above rely on.
+test("uninstall waits for a running refresh before it removes the saved data", async function() {
+  ok(["fetch"])
+  assert.ok(fs.existsSync(stateDir()))
+  await setMode("slow")
+  const fetching = spawn(CLI, ["fetch", "--full"], { env: env, stdio: "ignore" })
+  const finished = new Promise(function(done) { fetching.on("exit", done) })
+  await new Promise(function(done) { setTimeout(done, 1500) })
+  const home = path.join(tmp, "home")
+  fs.mkdirSync(home, { recursive: true })
+  const un = spawnSync(path.join(__dirname, "..", "uninstall.sh"), [], {
+    env: Object.assign({}, env, { HOME: home }), encoding: "utf8", timeout: 120000
+  })
+  await finished
+  await setMode("ok")
+  assert.equal(un.status, 0, un.stderr)
+  assert.match(un.stdout, /waiting for a running refresh to finish/)
+  assert.equal(fetching.exitCode, 0)
+  assert.equal(fs.existsSync(stateDir()), false)
+})
+

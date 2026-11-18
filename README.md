@@ -222,12 +222,40 @@ computer or a private network.
 
 ## Uninstall
 
+`omarchy plugin remove` deletes the plugin folder only. It does not run the
+plugin's uninstaller, so run that first, from the plugin folder:
+
 ```sh
+~/.config/omarchy/plugins/io.github.sette7blo.omathor/uninstall.sh
 omarchy plugin remove io.github.sette7blo.omathor
 ```
 
-or `./uninstall.sh` from a clone, which also removes the command, the
-launcher entry and the saved snapshot.
+From a clone, run `./uninstall.sh` in the clone instead.
+
+The uninstaller turns the plugin off, which drops its bar entry and with it
+the settings (your bond addresses, THORNames, endpoints), removes the
+`omathor` command and launcher links that point into the plugin, and deletes
+everything omathor saved in `~/.local/state/omarchy/omathor/`:
+
+| File | What it holds |
+|---|---|
+| `snapshot.json` | The last network and node data fetched |
+| `summary.json` | Your bond addresses with their bonds and rewards |
+| `names.json` | Your THORNames, and which addresses were searched for names |
+| `votes.json`, `adrs.json` | Node votes and ADR titles |
+| `.fetch.*` | Work folders of a refresh that was cut off, for example by a shell restart |
+
+If the plugin was already removed without it, delete that folder and the two
+links by hand:
+
+```sh
+rm -rf ~/.local/state/omarchy/omathor
+rm -f ~/.local/bin/omathor ~/.local/share/applications/omathor.desktop
+```
+
+Check first that the two links are omathor's (`ls -l` shows where they
+point); the installer never replaces a command or launcher of that name that
+belongs to something else.
 
 ## License
 

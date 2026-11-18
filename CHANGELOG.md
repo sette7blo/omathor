@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.2] - 2026-11-18
+
 ### Fixed
 - The launcher (`omathor.desktop`) runs the plugin's own `bin/omathor` instead of `~/.local/bin/omathor`,
   which may belong to another program when the installer left it alone. Launchers written by earlier versions are rewritten on the next load.
@@ -52,6 +54,7 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.2...HEAD
+[v0.1.2]: https://github.com/sette7blo/omathor/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/sette7blo/omathor/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/sette7blo/omathor/releases/tag/v0.1.0

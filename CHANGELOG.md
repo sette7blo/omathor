@@ -6,6 +6,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The installer no longer moves an existing `~/.local/bin/omathor` or `omathor.desktop` aside
+  to put its own link there. A path that is already taken is left as it is, and the
+  plugin works without the link. The uninstaller removes only links that point into the
+  plugin. Backups made by earlier versions (`*.bak.<date>`) are not touched.
+
 ## [v0.1.0] - 2026-11-18
 
 ### Added

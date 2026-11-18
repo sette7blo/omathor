@@ -69,7 +69,11 @@ in_place() {
 
 setup_complete() {
   in_place "$CLI_LINK" || return 1
-  [[ -e "$PROJECT_DIR/omathor.desktop" ]] && in_place "$DESKTOP_LINK"
+  if desktop_path_ok; then
+    # A launcher rendered by an older version pointed at ~/.local/bin/omathor.
+    render_desktop | cmp -s - "$PROJECT_DIR/omathor.desktop" || return 1
+    in_place "$DESKTOP_LINK" || return 1
+  fi
 }
 
 install_plugin_link() {
@@ -87,9 +91,24 @@ install_cli() {
   link_path "$PROJECT_DIR/bin/omathor" "$CLI_LINK"
 }
 
+# The launcher runs the plugin's own bin/omathor, never ~/.local/bin/omathor:
+# that path may belong to another program the installer left alone. A plugin
+# path that would need quoting in an Exec key gets no launcher at all.
+desktop_path_ok() {
+  [[ "$PROJECT_DIR" =~ ^[A-Za-z0-9._/+-]+$ ]]
+}
+
+render_desktop() {
+  sed "s|@@OMATHOR_CLI@@|$PROJECT_DIR/bin/omathor|g" "$PROJECT_DIR/omathor.desktop.in"
+}
+
 install_desktop() {
   local rendered="$PROJECT_DIR/omathor.desktop"
-  sed "s|@@OMATHOR_CLI@@|$CLI_LINK|g" "$PROJECT_DIR/omathor.desktop.in" > "$rendered"
+  if ! desktop_path_ok; then
+    log "no launcher: the plugin path has characters a launcher cannot hold safely"
+    return 0
+  fi
+  render_desktop > "$rendered"
   link_path "$rendered" "$DESKTOP_LINK"
   command -v update-desktop-database >/dev/null 2>&1 \
     && update-desktop-database "$DATA_HOME/applications" >/dev/null 2>&1 || true

@@ -1,0 +1,36 @@
+# Changelog
+
+All notable changes to this project are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
+project uses [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+- Bar widget: a bolt coloured by THORChain's health and the state of your bonded nodes.
+  Optionally shows the time to the next churn or what your bonds earned since the last
+  churn.
+- Panel with four tabs: Network (churn, halts, vaults, queue, nodes, price), Bonds
+  (each node you bond to, with reward, APY, slash points and churn-out risk), Names and Chains.
+- Churn state that follows the chain: blocked, halted by mimir, churning, due, or a
+  countdown.
+- Several bond addresses; amounts in RUNE or USD.
+- THORNames: expiry countdown, affiliate fees waiting for the payout, owner and
+  addresses. Found from your bond addresses (each searched once), or added by hand; read
+  again by hand, daily or weekly.
+- Notifications for churns, chain halts, changes to your nodes and THORNames close to
+  expiring, off by default.
+- `omathor panel <tab>` opens the panel on a tab, for a keybinding.
+- `omathor` command line tool: `status`, `network`, `bond`, `names`, `votes`, `pools`,
+  `chains`, `refresh`, with `--json`.
+- Pools tab: whether each pool can be swapped now, its liquidity, 2% depth, 24h volume
+  and APR.
+- Votes tab: node votes on mimir settings closest to the two-thirds needed to pass, how
+  your nodes voted, and ADR titles and summaries from THORNode's repository.
+- Network security (bond against vault assets, reward split, pooled RUNE, reserve) and
+  upgrade progress (active nodes on the newest version, chain upgrade proposals) on the
+  Network tab, with when the required version was raised and whether nodes below it can
+  now be churned out. A node of yours below it is flagged with the time left to upgrade.
+- Public THORNode with a fallback, the THORChain RPC for the block header, and Midgard;
+  your own endpoints can be set instead. Responses are compressed, and the node list is
+  read every 30 minutes, every 10 while you look at it.

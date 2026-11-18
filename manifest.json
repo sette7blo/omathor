@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.sette7blo.omathor",
+  "name": "Omathor for THORChain",
+  "version": "0.1.0",
+  "author": "sette7blo",
+  "license": "MIT",
+  "description": "THORChain at a glance: network health, the churn, your bonded nodes, THORNames, node votes and pools, from public THORNode and Midgard APIs. Read-only. Bonds are found locally; an address is sent only once, to find its THORNames.",
+  "homepage": "https://github.com/sette7blo/omathor",
+  "funding": { "monero": "42iX2Knyef7Wi4rZxcWMw84DY7x1HUk67LKCqiqB1r5eLicJFvGbpCzUSiAqV8rGzbPW6yzmSGE93ZikU3PUkwnvQopggMB" },
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omathor",
+    "description": "A bolt coloured by THORChain's health and your bonded nodes, with a panel for the network, bonds, THORNames, votes, pools and chains.",
+    "category": "System",
+    "aliases": [
+      "omathor",
+      "thorchain",
+      "rune",
+      "churn",
+      "bond"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

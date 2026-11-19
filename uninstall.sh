@@ -18,53 +18,16 @@ STATE_DIR="$STATE_HOME/omarchy/omathor"
 
 log() { printf '[omathor] %s\n' "$*"; }
 
-# The plugin's own commands still running (a refresh, a name lookup), found
-# by the plugin's bin/omathor among their arguments, through a link or not,
-# and every process they started (curl, jq): everything that can still write.
-writer_pids() {
-  local own f arg pid p pp changed=1
-  local -A found=()
-  own="$(readlink -f "$PROJECT_DIR/bin/omathor")"
-  for f in /proc/[0-9]*/cmdline; do
-    pid="${f#/proc/}"
-    pid="${pid%/cmdline}"
-    [[ "$pid" == "$$" ]] && continue
-    while IFS= read -r -d '' arg; do
-      [[ "$arg" == */bin/omathor ]] || continue
-      [[ "$(readlink -f "$arg" 2>/dev/null)" == "$own" ]] && { found[$pid]=1; break; }
-    done < "$f" 2>/dev/null
-  done
-  (( ${#found[@]} )) || return 0
-  local table
-  table="$(ps -e -o pid=,ppid=)"
-  while (( changed )); do
-    changed=0
-    while read -r p pp; do
-      [[ -n "${found[$pp]:-}" && -z "${found[$p]:-}" ]] && { found[$p]=1; changed=1; }
-    done <<<"$table"
-  done
-  printf '%s\n' "${!found[@]}"
-}
-
-# Stops them: TERM, then KILL what is left. Fails only if something survives.
-stop_writers() {
-  local -a pids
-  local i
-  mapfile -t pids < <(writer_pids)
-  (( ${#pids[@]} )) || return 0
-  log "stopping the plugin's running commands"
-  kill -TERM "${pids[@]}" 2>/dev/null || true
-  for ((i = 0; i < 50; i++)); do
-    [[ -z "$(writer_pids)" ]] && return 0
-    sleep 0.1
-  done
-  mapfile -t pids < <(writer_pids)
-  (( ${#pids[@]} )) && kill -KILL "${pids[@]}" 2>/dev/null
-  for ((i = 0; i < 20; i++)); do
-    [[ -z "$(writer_pids)" ]] && return 0
-    sleep 0.1
-  done
-  return 1
+# Running omathor commands hold a shared lock for as long as they run (see
+# coordinate in bin/omathor). Taking it exclusively waits for them; no process
+# is signalled. Same folder as bin/omathor's lock_dir.
+lock_dir() {
+  local run="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [[ -d "$run" && -O "$run" ]]; then
+    printf '%s/omathor' "$run"
+  else
+    printf '%s/omarchy/.omathor-run' "$STATE_HOME"
+  fi
 }
 
 # Removes only links that point into this plugin; a command or launcher of the
@@ -88,23 +51,40 @@ remove_link "$PLUGIN_LINK"
 remove_link "$CLI_LINK"
 remove_link "$DESKTOP_LINK"
 
-# Disabling stops the background service, but a command it already started
-# (a refresh, a name lookup) would write after the folder is gone, and its
-# error handler creates the folder again. So those are stopped first, and the
-# uninstaller fails, rather than report success, if anything is still writing.
-if ! stop_writers; then
-  log "a running omathor command could not be stopped; $STATE_DIR was left. Run this again."
-  exit 1
-fi
-
-if [[ -d "$STATE_DIR" ]]; then
-  rm -rf "$STATE_DIR"
-  log "removed $STATE_DIR"
-fi
-sleep 1
-if [[ -e "$STATE_DIR" || -n "$(writer_pids)" ]]; then
-  log "something wrote to $STATE_DIR again while it was removed. Run this again."
-  exit 1
+# Disabling stops the background service. A command it already started (a
+# refresh, a name lookup) is waited for: the data is deleted while this holds
+# the lock exclusively, and the time it finished is recorded, so a command
+# that started before then and was waiting for the lock exits without writing.
+# If running commands do not finish in time, nothing is deleted and this
+# fails, asking to be run again.
+WAIT="${OMATHOR_UNINSTALL_WAIT:-90}"
+[[ "$WAIT" =~ ^[0-9]{1,4}$ ]] || WAIT=90
+if command -v flock >/dev/null 2>&1; then
+  LOCK_DIR="$(lock_dir)"
+  mkdir -p -m 700 "$LOCK_DIR"
+  exec {lock}>>"$LOCK_DIR/lock"
+  if ! flock -n -x "$lock"; then
+    log "waiting for a running omathor command to finish"
+    if ! flock -w "$WAIT" -x "$lock"; then
+      log "an omathor command is still running; $STATE_DIR was left. Run this again when it has finished."
+      exit 1
+    fi
+  fi
+  if [[ -d "$STATE_DIR" ]]; then
+    rm -rf "$STATE_DIR"
+    log "removed $STATE_DIR"
+  fi
+  # The boot and the time since it, as bin/omathor's boot_mark records them.
+  read -r up _ < /proc/uptime
+  printf '%s %s\n' "$(cat /proc/sys/kernel/random/boot_id)" "${up//./}" > "$LOCK_DIR/removed.tmp"
+  mv -f "$LOCK_DIR/removed.tmp" "$LOCK_DIR/removed"
+  exec {lock}>&-
+else
+  log "flock not found, so running omathor commands cannot be waited for"
+  if [[ -d "$STATE_DIR" ]]; then
+    rm -rf "$STATE_DIR"
+    log "removed $STATE_DIR"
+  fi
 fi
 
 if command -v omarchy-shell >/dev/null 2>&1; then

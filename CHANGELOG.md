@@ -6,6 +6,26 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `uninstall.sh` no longer signals any process. Version 0.1.5 stopped every process with
+  the plugin's script path in its arguments, which could include an unrelated program,
+  such as an editor showing that file. Now every `omathor` command holds a shared lock
+  while it runs, and the uninstaller takes it exclusively: it waits for running commands
+  (up to 90 seconds, `OMATHOR_UNINSTALL_WAIT`), deletes the data only while it holds the
+  lock, and fails without deleting anything if a command is still running. A command that
+  was waiting for the lock during the uninstall exits without writing.
+
+### Security
+- A THORName removed from the settings is no longer read: a refresh waiting in the queue
+  is dropped, and each one is checked against the selection before it is sent. The panel
+  no longer has the refresh save its results: it runs `names refresh --print`, keeps the
+  results of names still selected, and saves them with the new `names save`, through the
+  same ordered queue as its other changes to `names.json`. `names refresh` run by hand
+  still saves directly.
+- Notifications no longer put THORNames or node addresses in `notify-send`'s arguments.
+  The panel sends them over D-Bus with `lib/notify.py`, which reads them from stdin; if the
+  notification service cannot be reached that way, it sends a notice that names nothing.
+
 ## [v0.1.5] - 2026-11-18
 
 ### Security

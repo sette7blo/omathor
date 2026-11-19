@@ -86,12 +86,45 @@ Item {
     if (fromFetch && root.options.notify) root.notify(Model.events(previous, next))
   }
 
+  // Titles can name a THORName or a node, so they go to lib/notify.py on
+  // stdin, never in notify-send's arguments, which other accounts on the
+  // computer can read. If the helper cannot reach the notification service,
+  // a notice that names nothing is sent instead.
+  property var notifyQueue: []
+
   function notify(list) {
-    for (var i = 0; i < list.length; i++) {
-      var argv = ["notify-send", "-a", "Omathor"]
-      if (list[i].urgent) argv.push("-u", "critical")
-      argv.push(Model.notifyText(list[i].title), Model.notifyText(list[i].body))
-      Util.execArgv(argv)
+    var items = (list || []).map(function(n) {
+      return { title: Model.notifyText(n.title), body: Model.notifyText(n.body), urgent: n.urgent === true }
+    })
+    if (!items.length) return
+    root.notifyQueue = root.notifyQueue.concat(items)
+    root.nextNotify()
+  }
+
+  function nextNotify() {
+    if (notifyProc.running || !root.notifyQueue.length) return
+    notifyProc.items = root.notifyQueue.slice(0, 5)
+    root.notifyQueue = root.notifyQueue.slice(5)
+    notifyProc.command = ["python3", "-I", root.pluginDir + "/lib/notify.py"]
+    notifyProc.running = true
+  }
+
+  Process {
+    id: notifyProc
+    property var items: []
+    running: false
+    stdinEnabled: true
+    onRunningChanged: if (running) notifyProc.write(JSON.stringify(notifyProc.items) + "\n")
+    onExited: function(code) {
+      if (code !== 0 && notifyProc.items.length) {
+        var urgent = notifyProc.items.some(function(n) { return n.urgent })
+        var argv = ["notify-send", "-a", "Omathor"]
+        if (urgent) argv.push("-u", "critical")
+        argv.push("Omathor", notifyProc.items.length === 1 ? "Something needs a look. Open the panel." : notifyProc.items.length + " things need a look. Open the panel.")
+        Util.execArgv(argv)
+      }
+      notifyProc.items = []
+      root.nextNotify()
     }
   }
 
@@ -266,7 +299,13 @@ Item {
 
   function removeName(name) {
     root.persistSettings({ names: Model.removeName(root.options, name).names })
+    // A refresh still waiting for its turn is not sent any more.
+    root.refreshQueue = root.refreshQueue.filter(function(n) { return n !== name })
     root.forgetNames()
+  }
+
+  function nameSelected(name) {
+    return root.options.names.some(function(n) { return n.name === name })
   }
 
   // Sends the addresses to Midgard: only from adding one or Find names. Each
@@ -287,8 +326,11 @@ Item {
     findProc.running = true
   }
 
+  // Each name is checked against the current selection again when its turn
+  // comes. The results are not saved by the command: they come back here and
+  // only those of names still selected are saved, through the write queue.
   function refreshNames(names) {
-    var list = (names || []).filter(function(n) { return Model.isName(n) })
+    var list = (names || []).filter(function(n) { return Model.isName(n) && root.nameSelected(n) })
     if (!list.length) return
     if (namesProc.running) {
       root.refreshQueue = root.refreshQueue.concat(list)
@@ -296,7 +338,7 @@ Item {
     }
     root.namesError = ""
     namesProc.asked = list
-    namesProc.command = [root.cli, "names", "refresh", "-"]
+    namesProc.command = [root.cli, "names", "refresh", "--print", "-"]
     namesProc.running = true
   }
 
@@ -326,9 +368,11 @@ Item {
     while (!writeProc.running && root.writeQueue.length) {
       var job = root.writeQueue[0]
       root.writeQueue = root.writeQueue.slice(1)
-      var list = job.op === "searched" ? job.list.filter(function(a) { return root.selected(a) }) : job.list
+      var list = job.op === "searched" ? job.list.filter(function(a) { return root.selected(a) })
+        : job.op === "save" ? job.list.filter(function(r) { return r && root.nameSelected(r.name) })
+        : job.list
       if (!list.length) continue
-      writeProc.payload = list.join(" ")
+      writeProc.payload = job.op === "save" ? JSON.stringify(list) : list.join(" ")
       writeProc.command = [root.cli, "names", job.op, "-"]
       writeProc.running = true
     }
@@ -386,14 +430,14 @@ Item {
     running: false
     stdinEnabled: true
     onRunningChanged: if (running) namesProc.write(namesProc.asked.join(" ") + "\n")
+    stdout: StdioCollector { id: namesOut; waitForEnd: true }
     stderr: StdioCollector { id: namesErr; waitForEnd: true }
     onExited: function(code) {
       if (code !== 0) root.namesError = Model.errorText(namesErr.text) || "The name refresh failed."
-      // A name removed while it was being read is dropped again.
-      var kept = root.options.names.map(function(n) { return n.name })
-      var dropped = namesProc.asked.filter(function(n) { return kept.indexOf(n) === -1 })
-      if (dropped.length) root.writeNames("forget", dropped)
-      namesFile.reload()
+      // Names that failed are in the results too, marked, so a failed read is
+      // recorded as before. A name removed meanwhile is left out.
+      var results = Model.parseJson(namesOut.text)
+      if (Array.isArray(results)) root.writeNames("save", results)
       var queued = root.refreshQueue
       root.refreshQueue = []
       if (queued.length) root.refreshNames(queued)

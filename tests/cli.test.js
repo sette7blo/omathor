@@ -10,6 +10,7 @@ const Model = require("../Model.js")
 
 const CLI = path.join(__dirname, "..", "bin", "omathor")
 const ME = "thor1mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+const have = function(cmd) { return spawnSync("sh", ["-c", "command -v " + cmd]).status === 0 }
 
 let server, base, tmp, env
 
@@ -30,11 +31,14 @@ const snapshot = function() { return JSON.parse(fs.readFileSync(path.join(stateD
 
 test.before(async function() {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "omathor-test-"))
+  fs.mkdirSync(path.join(tmp, "run"), { mode: 0o700 })
   server = spawn(process.execPath, [path.join(__dirname, "fake-server.js")], { stdio: ["ignore", "pipe", "inherit"] })
   const port = await new Promise(function(done) { server.stdout.once("data", function(d) { done(String(d).trim()) }) })
   base = "http://127.0.0.1:" + port
   env = Object.assign({}, process.env, {
     XDG_STATE_HOME: path.join(tmp, "state"), XDG_CONFIG_HOME: path.join(tmp, "config"),
+    // The lock and the record of the last uninstall live here: never the real one.
+    XDG_RUNTIME_DIR: path.join(tmp, "run"),
     OMATHOR_THORNODE: base, OMATHOR_MIDGARD: base
   })
 })
@@ -281,28 +285,138 @@ test("lookups take their addresses and names from stdin, and none reach a proces
   assert.doesNotMatch(argv, /(^| )(mine|gone)( |$)/m)
 })
 
-// Last: it removes the saved data the tests above rely on.
-test("uninstall stops a running refresh before it removes the saved data", async function() {
-  ok(["fetch"])
-  assert.ok(fs.existsSync(stateDir()))
-  await setMode("slow")
-  const fetching = spawn(CLI, ["fetch", "--full"], { env: env, stdio: "ignore" })
-  const finished = new Promise(function(done) { fetching.on("exit", done) })
-  await new Promise(function(done) { setTimeout(done, 1500) })
-  const home = path.join(tmp, "home")
-  fs.mkdirSync(home, { recursive: true })
-  const un = spawnSync(path.join(__dirname, "..", "uninstall.sh"), [], {
-    env: Object.assign({}, env, { HOME: home }), encoding: "utf8", timeout: 120000
-  })
-  await finished
-  await setMode("ok")
-  assert.equal(un.status, 0, un.stdout + un.stderr)
-  assert.match(un.stdout, /stopping the plugin's running commands/)
-  // Stopped, not waited for: a full fetch here takes far longer than this.
-  assert.notEqual(fetching.exitCode, 0)
-  await new Promise(function(done) { setTimeout(done, 1500) })
-  assert.equal(fs.existsSync(stateDir()), false)
-  const left = spawnSync("sh", ["-c", "ps -e -o args= | grep -F -- '" + CLI + "' | grep -v grep || true"], { encoding: "utf8" }).stdout
-  assert.equal(left.trim(), "")
+test("names refresh --print saves nothing, and names save stores exactly what a direct refresh would", function() {
+  const file = path.join(stateDir(), "names.json")
+  ok(["names", "forget", "-"], null, "mine gone\n")
+  const printed = ok(["names", "refresh", "--print", "-"], null, "mine gone\n")
+  const results = JSON.parse(printed)
+  assert.deepEqual(results.map(function(r) { return r.name }), ["mine", "gone"])
+  const strip = function(items) {
+    const out = {}
+    for (const k of Object.keys(items)) { out[k] = Object.assign({}, items[k]); delete out[k].fetchedAt }
+    return out
+  }
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).items.mine, undefined, "--print saved nothing")
+  ok(["names", "save"], null, printed + "\n")
+  const viaSave = strip(JSON.parse(fs.readFileSync(file, "utf8")).items)
+  ok(["names", "forget", "-"], null, "mine gone\n")
+  ok(["names", "refresh", "-"], null, "mine gone\n")
+  const direct = strip(JSON.parse(fs.readFileSync(file, "utf8")).items)
+  assert.deepEqual(viaSave, direct)
+  // Anything else is dropped or refused, never saved as is.
+  ok(["names", "save"], null, JSON.stringify([{ name: "../x", found: true }, { name: "fine", found: false, extra: "dropped" }]) + "\n")
+  const after = JSON.parse(fs.readFileSync(file, "utf8")).items
+  assert.equal(after["../x"], undefined)
+  assert.deepEqual(Object.keys(after.fine).sort(), ["error", "fetchedAt", "found", "name"])
+  assert.notEqual(run(["names", "save"], null, "not json\n").code, 0)
 })
 
+test("the notification helper sends title, text and urgency over D-Bus, with nothing in its arguments", { skip: !have("dbus-run-session") && "dbus-run-session missing" }, function() {
+  const server = path.join(__dirname, "fake_notifications.py")
+  const out = spawnSync("dbus-run-session", ["--", "python3", "-I", server, path.join(__dirname, "..", "lib", "notify.py")], {
+    input: JSON.stringify([{ title: "THORName mine expires in 6 days", body: "Renew it.", urgent: false }, { title: "Node thor1x is leaving", body: "", urgent: true }]) + "\n",
+    encoding: "utf8", timeout: 30000
+  })
+  assert.equal(out.status, 0, out.stderr)
+  const report = JSON.parse(out.stdout)
+  assert.equal(report.helperExit, 0)
+  assert.deepEqual(report.calls, [
+    { app: "Omathor", summary: "THORName mine expires in 6 days", body: "Renew it.", urgency: 1 },
+    { app: "Omathor", summary: "Node thor1x is leaving", body: "", urgency: 2 }
+  ])
+  assert.equal(report.helperArgv.join(" ").indexOf("mine"), -1)
+})
+
+test("the notification helper fails when no notification service answers, so the panel can fall back", function() {
+  const out = spawnSync("python3", ["-I", path.join(__dirname, "..", "lib", "notify.py")], {
+    input: JSON.stringify([{ title: "t", body: "b", urgent: false }]) + "\n",
+    env: Object.assign({}, process.env, { DBUS_SESSION_BUS_ADDRESS: "unix:path=" + path.join(tmp, "no-bus") }),
+    encoding: "utf8", timeout: 30000
+  })
+  assert.notEqual(out.status, 0)
+})
+
+const UNINSTALL = path.join(__dirname, "..", "uninstall.sh")
+function uninstall(extra) {
+  const home = path.join(tmp, "home")
+  fs.mkdirSync(home, { recursive: true })
+  return spawnSync(UNINSTALL, [], { env: Object.assign({ HOME: home }, env, { HOME: home }, extra || {}), encoding: "utf8", timeout: 120000 })
+}
+const lockFile = function() { return path.join(env.XDG_RUNTIME_DIR, "omathor", "lock") }
+
+test("uninstall signals no process, not even one with the plugin's path in its arguments", async function() {
+  ok(["prepare"])
+  // An editor looking at the script, say: the path is in its arguments.
+  const viewer = spawn("sh", ["-c", "sleep 30", "sh", fs.realpathSync(CLI)], { stdio: "ignore" })
+  await new Promise(function(done) { setTimeout(done, 300) })
+  const un = uninstall()
+  assert.equal(un.status, 0, un.stdout + un.stderr)
+  assert.equal(viewer.exitCode, null, "the unrelated process is still running")
+  assert.equal(viewer.signalCode, null)
+  process.kill(viewer.pid)
+  assert.equal(fs.existsSync(stateDir()), false)
+  // A command started after the uninstall works as usual.
+  ok(["prepare"])
+  assert.ok(fs.existsSync(stateDir()))
+})
+
+test("uninstall waits for a running refresh, and fails without deleting if it does not finish in time", async function() {
+  ok(["fetch"])
+  await setMode("slow")
+  const fetching = spawn(CLI, ["fetch"], { env: env, stdio: "ignore" })
+  const finished = new Promise(function(done) { fetching.on("exit", function(code) { done(code) }) })
+  await new Promise(function(done) { setTimeout(done, 1500) })
+  const un = uninstall()
+  const code = await finished
+  await setMode("ok")
+  assert.equal(un.status, 0, un.stdout + un.stderr)
+  assert.match(un.stdout, /waiting for a running omathor command to finish/)
+  assert.equal(code, 0, "the refresh was waited for, not stopped")
+  assert.equal(fs.existsSync(stateDir()), false)
+
+  // A command that does not finish in time: nothing is deleted, and it says so.
+  ok(["prepare"])
+  const holder = spawn("flock", ["-s", lockFile(), "sleep", "5"], { stdio: "ignore", detached: true })
+  await new Promise(function(done) { setTimeout(done, 300) })
+  const late = uninstall({ OMATHOR_UNINSTALL_WAIT: "1" })
+  // flock and the sleep holding its lock, together.
+  process.kill(-holder.pid)
+  await new Promise(function(done) { setTimeout(done, 200) })
+  assert.equal(late.status, 1)
+  assert.match(late.stdout, /still running; .* was left. Run this again/)
+  assert.ok(fs.existsSync(stateDir()))
+})
+
+test("an uninstall from another boot, or one older than the command, does not stop it", function() {
+  const stamp = path.join(env.XDG_RUNTIME_DIR, "omathor", "removed")
+  const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+  // Another boot, with a far larger time since boot.
+  fs.writeFileSync(stamp, "00000000-0000-0000-0000-000000000000 999999999999\n")
+  ok(["prepare"])
+  // This boot, but before the command started.
+  fs.writeFileSync(stamp, boot + " 1\n")
+  ok(["prepare"])
+  fs.writeFileSync(stamp, "garbage\n")
+  ok(["prepare"])
+})
+
+// Last: it removes the saved data the tests above rely on.
+test("a command that waited for the lock during an uninstall writes nothing", async function() {
+  fs.rmSync(stateDir(), { recursive: true, force: true })
+  // Stand in for an uninstall in progress: the lock held exclusively.
+  const holder = spawn("flock", ["-x", lockFile(), "sleep", "2"], { stdio: "ignore", detached: true })
+  await new Promise(function(done) { setTimeout(done, 300) })
+  const waiting = spawn(CLI, ["prepare"], { env: env, stdio: ["ignore", "ignore", "pipe"] })
+  let err = ""
+  waiting.stderr.on("data", function(d) { err += d })
+  const exited = new Promise(function(done) { waiting.on("exit", function(code) { done(code) }) })
+  await new Promise(function(done) { setTimeout(done, 300) })
+  // The uninstall finishes: it records the time, then lets go of the lock.
+  const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+  const up = fs.readFileSync("/proc/uptime", "utf8").split(" ")[0].replace(".", "")
+  fs.writeFileSync(path.join(env.XDG_RUNTIME_DIR, "omathor", "removed"), boot + " " + up + "\n")
+  process.kill(-holder.pid)
+  assert.notEqual(await exited, 0)
+  assert.match(err, /uninstalled while this command waited; nothing was written/)
+  assert.equal(fs.existsSync(stateDir()), false)
+})

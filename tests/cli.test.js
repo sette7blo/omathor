@@ -338,40 +338,18 @@ test("the notification helper fails when no notification service answers, so the
 })
 
 const UNINSTALL = path.join(__dirname, "..", "uninstall.sh")
-// Stand-ins for omarchy and omarchy-shell. The file shell-mode says how the
-// shell behaves: ok (disable turns the plugin off), noshell (not running),
-// stuck (the plugin stays on) or absent (the shell does not know it).
-const fakeBin = function() {
-  const bin = path.join(tmp, "omarchy-bin")
-  if (!fs.existsSync(bin)) {
-    fs.mkdirSync(bin, { recursive: true })
-    const state = path.join(tmp, "shell-state")
-    fs.writeFileSync(path.join(bin, "omarchy"), [
-      "#!/bin/sh",
-      'mode="$(cat ' + path.join(tmp, "shell-mode") + ' 2>/dev/null || echo ok)"',
-      '[ "$1 $2" = "plugin disable" ] || exit 2',
-      'if [ "$mode" = ok ]; then echo off > ' + state + '; exit 0; fi',
-      "exit 1"
-    ].join("\n") + "\n", { mode: 0o755 })
-    fs.writeFileSync(path.join(bin, "omarchy-shell"), [
-      "#!/bin/sh",
-      'mode="$(cat ' + path.join(tmp, "shell-mode") + ' 2>/dev/null || echo ok)"',
-      '[ "$mode" = noshell ] && exit 1',
-      '[ "$2" = rescanPlugins ] && exit 0',
-      'if [ "$mode" = absent ]; then echo "[]"; exit 0; fi',
-      'on=true; [ "$mode" = ok ] && [ "$(cat ' + state + ' 2>/dev/null)" = off ] && on=false',
-      "printf '[{\"id\":\"io.github.sette7blo.omathor\",\"enabled\":%s},{\"id\":\"other\",\"enabled\":true}]\\n' \"$on\""
-    ].join("\n") + "\n", { mode: 0o755 })
-  }
-  return bin
-}
+// Stand-ins for omarchy and omarchy-shell live in tests/fake-omarchy; the
+// mode file says how the shell behaves (see the scripts).
+const FAKE_OMARCHY = path.join(__dirname, "fake-omarchy")
 function uninstall(extra, mode) {
   const home = path.join(tmp, "home")
   fs.mkdirSync(home, { recursive: true })
-  fs.writeFileSync(path.join(tmp, "shell-mode"), (mode || "ok") + "\n")
-  fs.rmSync(path.join(tmp, "shell-state"), { force: true })
-  const PATH = fakeBin() + ":" + process.env.PATH
-  return spawnSync(UNINSTALL, [], { env: Object.assign({}, env, { HOME: home, PATH: PATH }, extra || {}), encoding: "utf8", timeout: 120000 })
+  const fake = path.join(tmp, "fake-shell")
+  fs.mkdirSync(fake, { recursive: true })
+  fs.writeFileSync(path.join(fake, "mode"), (mode || "ok") + "\n")
+  fs.rmSync(path.join(fake, "entries"), { force: true })
+  const PATH = FAKE_OMARCHY + ":" + process.env.PATH
+  return spawnSync(UNINSTALL, [], { env: Object.assign({}, env, { HOME: home, PATH: PATH, FAKE_SHELL_DIR: fake }, extra || {}), encoding: "utf8", timeout: 120000 })
 }
 const lockFile = function() { return path.join(env.XDG_RUNTIME_DIR, "omathor", "lock") }
 
@@ -446,7 +424,9 @@ test("uninstall removes nothing unless the plugin is confirmed off", function() 
   fs.mkdirSync(path.dirname(cliLink), { recursive: true })
   fs.rmSync(cliLink, { force: true })
   fs.symlinkSync(fs.realpathSync(CLI), cliLink)
-  for (const mode of ["noshell", "stuck"]) {
+  // half: the bar entry goes, the plugins entry stays, so the service would
+  // still run although listPlugins already says the widget is off.
+  for (const mode of ["noshell", "stuck", "half"]) {
     const r = uninstall(null, mode)
     assert.equal(r.status, 1, mode)
     assert.match(r.stdout, /could not turn io.github.sette7blo.omathor off .* nothing was removed/, mode)

@@ -1,0 +1,22 @@
+#!/bin/sh
+# Stand-in for omarchy-shell in the uninstall tests. The plugin starts with
+# two entries: one in the bar layout, one in the top-level plugins list.
+# listPlugins reports only the bar entry as "enabled", as Omarchy does for a
+# bar widget.
+mode="$(cat "$FAKE_SHELL_DIR/mode" 2>/dev/null || echo ok)"
+n="$(cat "$FAKE_SHELL_DIR/entries" 2>/dev/null || echo 2)"
+[ "$mode" = noshell ] && exit 1
+id=io.github.sette7blo.omathor
+bar='[]'; plugins='[]'
+[ "$n" -ge 2 ] && bar='[{"id":"'$id'","addresses":[]}]'
+[ "$n" -ge 1 ] && plugins='[{"id":"'$id'"}]'
+case "$2" in
+  rescanPlugins) exit 0 ;;
+  listPlugins)
+    if [ "$mode" = absent ]; then echo '[]'; exit 0; fi
+    on=false; [ "$n" -ge 2 ] && on=true
+    printf '[{"id":"%s","enabled":%s},{"id":"other","enabled":true}]\n' "$id" "$on" ;;
+  listShellConfig)
+    printf '{"bar":{"layout":{"left":["clock"],"right":%s}},"plugins":%s}\n' "$bar" "$plugins" ;;
+  *) exit 2 ;;
+esac

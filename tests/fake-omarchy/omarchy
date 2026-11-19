@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for omarchy in the uninstall tests: only "plugin disable".
+# $FAKE_SHELL_DIR/mode: ok (each disable removes one entry), half (only the
+# bar entry can be removed), stuck (nothing is removed), noshell, absent.
+mode="$(cat "$FAKE_SHELL_DIR/mode" 2>/dev/null || echo ok)"
+n="$(cat "$FAKE_SHELL_DIR/entries" 2>/dev/null || echo 2)"
+[ "$1 $2" = "plugin disable" ] || exit 2
+if [ "$mode" = ok ] && [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE_SHELL_DIR/entries"; exit 0; fi
+if [ "$mode" = half ] && [ "$n" -eq 2 ]; then echo 1 > "$FAKE_SHELL_DIR/entries"; exit 0; fi
+exit 1

@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.7] - 2026-11-19
+
 ### Fixed
 - `uninstall.sh` removes nothing unless the plugin is confirmed off: it turns it off, then
   checks with the running shell (`omarchy-shell shell listPlugins`), and stops with a
@@ -134,7 +136,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.7...HEAD
+[v0.1.7]: https://github.com/sette7blo/omathor/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/sette7blo/omathor/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/sette7blo/omathor/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/sette7blo/omathor/compare/v0.1.3...v0.1.4

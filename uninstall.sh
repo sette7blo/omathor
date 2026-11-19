@@ -42,23 +42,46 @@ remove_link() {
 }
 
 # 1. The plugin is turned off, and that is checked with the running shell:
-# while it is on, its service starts commands and writes its summary. If that
-# cannot be confirmed, nothing is changed.
-off_or_absent() {
-  local state
-  state="$(omarchy-shell shell listPlugins 2>/dev/null | jq -r --arg id "$PLUGIN_ID" '
-    [.[]? | select(.id == $id) | .enabled]
-    | if length == 0 then "absent" elif any(. == true) then "on" else "off" end' 2>/dev/null)" || return 1
-  [[ "$state" == off || "$state" == absent ]]
+# while it is on, its service starts commands and writes its summary. The
+# service runs while the shell's configuration lists the plugin anywhere: in
+# the bar layout or in the top-level plugins list (the bar status that
+# listPlugins reports covers only the first). One disable removes one such
+# entry, so it is repeated until none is left, checked in the shell's live
+# configuration. If that cannot be confirmed, nothing is changed.
+known_to_shell() {
+  local n
+  n="$(omarchy-shell shell listPlugins 2>/dev/null | jq -r --arg id "$PLUGIN_ID" '[.[]? | select(.id == $id)] | length' 2>/dev/null)" || return 2
+  [[ "$n" =~ ^[0-9]+$ ]] || return 2
+  (( n > 0 ))
+}
+entries_in_config() {
+  omarchy-shell shell listShellConfig 2>/dev/null | jq -r --arg id "$PLUGIN_ID" '
+    def ids: if type == "object" then (.id // "" | tostring) elif type == "string" then . else "" end;
+    ([.bar.layout // {} | objects | .[] | arrays | .[] | ids]
+     + [.plugins // [] | arrays | .[] | ids]
+     + [.bar.id // "" | tostring])
+    | map(select(. == $id)) | length' 2>/dev/null
+}
+service_off() {
+  local known=0 n
+  known_to_shell || known=$?
+  (( known == 2 )) && return 1
+  # A plugin the shell does not know has no service running.
+  (( known == 1 )) && return 0
+  n="$(entries_in_config)" || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n == 0 ))
 }
 if ! command -v omarchy >/dev/null 2>&1 || ! command -v omarchy-shell >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
   log "omarchy, omarchy-shell or jq not found, so $PLUGIN_ID cannot be turned off; nothing was removed"
   exit 1
 fi
-# Its exit status is not what counts (it also fails for a plugin the shell
-# does not know); the shell's own list is.
-omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
-if ! off_or_absent; then
+# The exit status of disable is not what counts (it also fails for a plugin
+# the shell does not know); the shell's configuration is.
+for ((i = 0; i < 5; i++)); do
+  service_off && break
+  omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
+done
+if ! service_off; then
   log "could not turn $PLUGIN_ID off (is the Omarchy shell running?); nothing was removed. Run this again from your desktop session."
   exit 1
 fi

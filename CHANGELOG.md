@@ -6,6 +6,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `uninstall.sh` could take a widget removed from the bar for a stopped service. omathor's
+  service runs while the shell's configuration lists the plugin anywhere: in the bar
+  layout or in the top-level plugins list, and the status `listPlugins` gives for a bar
+  widget covers only the bar. The uninstaller now repeats `omarchy plugin disable` (each
+  call removes one entry) until the shell's live configuration (`listShellConfig`) lists
+  it nowhere, and removes nothing if that cannot be confirmed. A plugin the shell does not
+  know at all has no service and is not waited for.
+- Removing a bond address could leave a THORName found through it in `names.json`, if
+  that name's first save was running. The names that go with the address are now
+  forgotten by name, after any running save, and so are names a lookup no longer finds
+  for an address.
+
 ## [v0.1.7] - 2026-11-19
 
 ### Fixed

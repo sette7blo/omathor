@@ -248,9 +248,10 @@ omarchy plugin remove io.github.sette7blo.omathor
 From a clone, run `./uninstall.sh` in the clone instead.
 
 Run it from your desktop session, with the Omarchy shell running. The
-uninstaller first turns the plugin off and checks with the shell that it is
-off, which drops its bar entry and with it the settings (your bond
-addresses, THORNames, endpoints); if it cannot confirm that, it removes
+uninstaller first turns the plugin off, until the shell's configuration no
+longer lists it anywhere (its bar entry, and a top-level plugins entry if
+there is one), so its service has stopped; this drops the settings (your
+bond addresses, THORNames, endpoints). If it cannot confirm that, it removes
 nothing and says so. It then waits for any omathor command still running to
 finish (up to 90 seconds; it stops no process); if one is still running,
 nothing is removed and it says so. Only then does it remove the `omathor`

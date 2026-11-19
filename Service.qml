@@ -268,14 +268,20 @@ Item {
   }
 
   function removeAddress(address) {
+    // Names found through this address go with it. They are forgotten by
+    // name too, not only if they are already in the cached names.json: the
+    // first save of one may be running, and the write queue runs this after.
+    var linked = root.options.names.filter(function(n) { return n.owner === address })
+      .map(function(n) { return Model.cleanName(n.name) }).filter(function(n) { return Model.isName(n) })
     var next = Model.removeAddress(root.options, address)
     var tried = root.tried
     delete tried[address]
     root.tried = tried
     root.persistSettings({ addresses: next.addresses, names: next.names })
-    // A lookup still waiting for its turn is not sent any more.
+    // A lookup or refresh still waiting for its turn is not sent any more.
     root.findQueue = root.findQueue.filter(function(a) { return a !== address })
-    root.forgetNames([address])
+    root.refreshQueue = root.refreshQueue.filter(function(n) { return linked.indexOf(n) === -1 })
+    root.forgetNames([address].concat(linked))
   }
 
   function selected(address) {
@@ -410,15 +416,21 @@ Item {
         // names are not added and its search is not recorded.
         var still = findProc.asked.filter(function(a) { return root.selected(a) })
         var current = root.options
+        var before = current.names.map(function(n) { return n.name })
         var added = []
         for (var i = 0; i < still.length; i++) {
           var r = Model.setFoundNames(current, still[i], found[still[i]])
           current = r.options
           added = added.concat(r.added)
         }
+        // Names an address no longer owns leave the settings; forgotten by
+        // name, as in removeName, in case a save of one is running.
+        var dropped = before.filter(function(n) {
+          return Model.isName(n) && !current.names.some(function(m) { return m.name === n })
+        })
         root.persistSettings({ names: current.names })
         root.writeNames("searched", still)
-        root.forgetNames()
+        root.forgetNames(dropped)
         root.refreshNames(added)
       }
       var queued = root.findQueue

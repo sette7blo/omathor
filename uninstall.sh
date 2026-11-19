@@ -41,24 +41,36 @@ remove_link() {
   log "removed $path"
 }
 
-if command -v omarchy >/dev/null 2>&1; then
-  omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
+# 1. The plugin is turned off, and that is checked with the running shell:
+# while it is on, its service starts commands and writes its summary. If that
+# cannot be confirmed, nothing is changed.
+off_or_absent() {
+  local state
+  state="$(omarchy-shell shell listPlugins 2>/dev/null | jq -r --arg id "$PLUGIN_ID" '
+    [.[]? | select(.id == $id) | .enabled]
+    | if length == 0 then "absent" elif any(. == true) then "on" else "off" end' 2>/dev/null)" || return 1
+  [[ "$state" == off || "$state" == absent ]]
+}
+if ! command -v omarchy >/dev/null 2>&1 || ! command -v omarchy-shell >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+  log "omarchy, omarchy-shell or jq not found, so $PLUGIN_ID cannot be turned off; nothing was removed"
+  exit 1
+fi
+# Its exit status is not what counts (it also fails for a plugin the shell
+# does not know); the shell's own list is.
+omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
+if ! off_or_absent; then
+  log "could not turn $PLUGIN_ID off (is the Omarchy shell running?); nothing was removed. Run this again from your desktop session."
+  exit 1
 fi
 
-# A plugin added with omarchy plugin add is a folder, not a link; omarchy
-# plugin remove takes that away.
-remove_link "$PLUGIN_LINK"
-remove_link "$CLI_LINK"
-remove_link "$DESKTOP_LINK"
-
-# Disabling stops the background service. A command it already started (a
-# refresh, a name lookup) is waited for: the data is deleted while this holds
-# the lock exclusively, and the time it finished is recorded, so a command
-# that started before then and was waiting for the lock exits without writing.
-# If running commands do not finish in time, nothing is deleted and this
-# fails, asking to be run again.
+# 2. A command already started (a refresh, a name lookup) is waited for: the
+# rest happens while this holds the lock exclusively, and the time it
+# finished is recorded, so a command that started before then and was
+# waiting for the lock exits without writing. If running commands do not
+# finish in time, nothing is removed and this fails, asking to be run again.
 WAIT="${OMATHOR_UNINSTALL_WAIT:-90}"
 [[ "$WAIT" =~ ^[0-9]{1,4}$ ]] || WAIT=90
+lock=""
 if command -v flock >/dev/null 2>&1; then
   LOCK_DIR="$(lock_dir)"
   mkdir -p -m 700 "$LOCK_DIR"
@@ -66,25 +78,37 @@ if command -v flock >/dev/null 2>&1; then
   if ! flock -n -x "$lock"; then
     log "waiting for a running omathor command to finish"
     if ! flock -w "$WAIT" -x "$lock"; then
-      log "an omathor command is still running; $STATE_DIR was left. Run this again when it has finished."
+      log "an omathor command is still running; nothing was removed (the plugin stays turned off). Run this again when it has finished."
       exit 1
     fi
   fi
-  if [[ -d "$STATE_DIR" ]]; then
-    rm -rf "$STATE_DIR"
-    log "removed $STATE_DIR"
-  fi
+else
+  log "flock not found, so running omathor commands cannot be waited for"
+fi
+
+# 3. Only now is anything removed. A plugin added with omarchy plugin add is
+# a folder, not a link; omarchy plugin remove takes that away.
+remove_link "$PLUGIN_LINK"
+remove_link "$CLI_LINK"
+remove_link "$DESKTOP_LINK"
+if [[ -d "$STATE_DIR" ]]; then
+  rm -rf "$STATE_DIR"
+  log "removed $STATE_DIR"
+fi
+if [[ -n "$lock" ]]; then
   # The boot and the time since it, as bin/omathor's boot_mark records them.
   read -r up _ < /proc/uptime
   printf '%s %s\n' "$(cat /proc/sys/kernel/random/boot_id)" "${up//./}" > "$LOCK_DIR/removed.tmp"
   mv -f "$LOCK_DIR/removed.tmp" "$LOCK_DIR/removed"
   exec {lock}>&-
-else
-  log "flock not found, so running omathor commands cannot be waited for"
-  if [[ -d "$STATE_DIR" ]]; then
-    rm -rf "$STATE_DIR"
-    log "removed $STATE_DIR"
-  fi
+fi
+
+# 4. Success is reported only if nothing wrote the folder again (a summary
+# the shell was writing as the plugin went off, say).
+sleep 1
+if [[ -e "$STATE_DIR" ]]; then
+  log "$STATE_DIR was written again while it was removed. Run this again."
+  exit 1
 fi
 
 if command -v omarchy-shell >/dev/null 2>&1; then

@@ -5,7 +5,7 @@
   "version": "0.1.8",
   "author": "sette7blo",
   "license": "MIT",
-  "description": "THORChain at a glance: network health, the churn, your bonded nodes, THORNames, node votes and pools, from public THORNode and Midgard APIs. Read-only. Bonds are found locally; an address is sent only once, to find its THORNames.",
+  "description": "THORChain from the Omarchy bar: one bolt, coloured by how the network and your nodes are doing. Six tabs: network health, the next churn (halts respected), security and upgrades; your bonds per node with share, earnings, APY and churn-out risk; THORNames with expiry and pending affiliate fees; node votes on mimir; pools with depth, volume and APR; and connected chains. Read-only, no key or account. Each bond address is sent only once, to look up its THORNames.",
   "homepage": "https://github.com/sette7blo/omathor",
   "funding": { "monero": "42iX2Knyef7Wi4rZxcWMw84DY7x1HUk67LKCqiqB1r5eLicJFvGbpCzUSiAqV8rGzbPW6yzmSGE93ZikU3PUkwnvQopggMB" },
   "kinds": [

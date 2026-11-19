@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.sette7blo.omathor",
   "name": "Omathor for THORChain",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": "sette7blo",
   "license": "MIT",
   "description": "THORChain at a glance: network health, the churn, your bonded nodes, THORNames, node votes and pools, from public THORNode and Midgard APIs. Read-only. Bonds are found locally; an address is sent only once, to find its THORNames.",

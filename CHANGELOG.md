@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.8] - 2026-11-19
+
 ### Fixed
 - `uninstall.sh` could take a widget removed from the bar for a stopped service. omathor's
   service runs while the shell's configuration lists the plugin anywhere: in the bar
@@ -149,7 +151,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.8...HEAD
+[v0.1.8]: https://github.com/sette7blo/omathor/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/sette7blo/omathor/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/sette7blo/omathor/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/sette7blo/omathor/compare/v0.1.4...v0.1.5

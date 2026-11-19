@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.9] - 2026-11-19
+
 ### Changed
 - The marketplace description names the six tabs and what each shows.
 
@@ -154,7 +156,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.9...HEAD
+[v0.1.9]: https://github.com/sette7blo/omathor/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/sette7blo/omathor/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/sette7blo/omathor/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/sette7blo/omathor/compare/v0.1.5...v0.1.6

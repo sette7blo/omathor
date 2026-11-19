@@ -6,6 +6,9 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- The marketplace description names the six tabs and what each shows.
+
 ## [v0.1.8] - 2026-11-19
 
 ### Fixed

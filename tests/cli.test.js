@@ -350,9 +350,11 @@ test("uninstall signals no process, not even one with the plugin's path in its a
   const viewer = spawn("sh", ["-c", "sleep 30", "sh", fs.realpathSync(CLI)], { stdio: "ignore" })
   await new Promise(function(done) { setTimeout(done, 300) })
   const un = uninstall()
+  // Let exit events of anything killed meanwhile arrive before looking.
+  await new Promise(function(done) { setTimeout(done, 500) })
   assert.equal(un.status, 0, un.stdout + un.stderr)
   assert.equal(viewer.exitCode, null, "the unrelated process is still running")
-  assert.equal(viewer.signalCode, null)
+  assert.equal(viewer.signalCode, null, "the unrelated process was not signalled")
   process.kill(viewer.pid)
   assert.equal(fs.existsSync(stateDir()), false)
   // A command started after the uninstall works as usual.

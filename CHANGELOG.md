@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.6] - 2026-11-19
+
 ### Fixed
 - `uninstall.sh` no longer signals any process. Version 0.1.5 stopped every process with
   the plugin's script path in its arguments, which could include an unrelated program,
@@ -120,7 +122,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.6...HEAD
+[v0.1.6]: https://github.com/sette7blo/omathor/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/sette7blo/omathor/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/sette7blo/omathor/compare/v0.1.3...v0.1.4
 [v0.1.3]: https://github.com/sette7blo/omathor/compare/v0.1.2...v0.1.3

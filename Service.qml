@@ -301,7 +301,10 @@ Item {
     root.persistSettings({ names: Model.removeName(root.options, name).names })
     // A refresh still waiting for its turn is not sent any more.
     root.refreshQueue = root.refreshQueue.filter(function(n) { return n !== name })
-    root.forgetNames()
+    // Forgotten by name, not only if it is already in the cached names.json:
+    // a save of it may be running, and the write queue runs this after it.
+    var clean = Model.cleanName(name)
+    root.forgetNames(Model.isName(clean) ? [clean] : [])
   }
 
   function nameSelected(name) {

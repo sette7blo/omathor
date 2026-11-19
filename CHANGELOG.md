@@ -6,6 +6,18 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `uninstall.sh` removes nothing unless the plugin is confirmed off: it turns it off, then
+  checks with the running shell (`omarchy-shell shell listPlugins`), and stops with a
+  message if it cannot confirm that (the shell not running, the plugin still on, the
+  Omarchy commands missing). Links and data are removed only after running commands have
+  finished, so a timeout leaves everything in place, and success is reported only if
+  nothing wrote the data folder again.
+- A THORName removed from the settings while its refresh result was being saved could
+  stay in `names.json`. Removing a name now always queues it to be forgotten, after any
+  save already running, instead of only when it was already in the panel's copy of the
+  file.
+
 ## [v0.1.6] - 2026-11-19
 
 ### Fixed

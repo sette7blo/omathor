@@ -247,16 +247,20 @@ omarchy plugin remove io.github.sette7blo.omathor
 
 From a clone, run `./uninstall.sh` in the clone instead.
 
-The uninstaller turns the plugin off, which drops its bar entry and with it
-the settings (your bond addresses, THORNames, endpoints), removes the
-`omathor` command and launcher links that point into the plugin, waits for
-any omathor command still running to finish (up to 90 seconds; it stops no
-process), and deletes everything omathor saved in
-`~/.local/state/omarchy/omathor/`. If a command is still running after that,
-nothing is deleted and it says so: run it again. It leaves a small lock file
-and the time of the uninstall in `$XDG_RUNTIME_DIR/omathor/`, which is
-emptied when you log out or restart; a command that was waiting for the
-uninstall exits without writing anything. The folder holds:
+Run it from your desktop session, with the Omarchy shell running. The
+uninstaller first turns the plugin off and checks with the shell that it is
+off, which drops its bar entry and with it the settings (your bond
+addresses, THORNames, endpoints); if it cannot confirm that, it removes
+nothing and says so. It then waits for any omathor command still running to
+finish (up to 90 seconds; it stops no process); if one is still running,
+nothing is removed and it says so. Only then does it remove the `omathor`
+command and launcher links that point into the plugin and delete everything
+omathor saved in `~/.local/state/omarchy/omathor/`, and it reports success
+only if nothing wrote that folder again. Whenever it stops early, run it
+again. It leaves a small lock file and the time of the uninstall in
+`$XDG_RUNTIME_DIR/omathor/`, which is emptied when you log out or restart; a
+command that was waiting for the uninstall exits without writing anything.
+The folder holds:
 
 | File | What it holds |
 |---|---|

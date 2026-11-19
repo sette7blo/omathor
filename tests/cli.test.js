@@ -10,6 +10,7 @@ const Model = require("../Model.js")
 
 const CLI = path.join(__dirname, "..", "bin", "omathor")
 const ME = "thor1mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+const sleep = function(ms) { return new Promise(function(done) { setTimeout(done, ms) }) }
 const have = function(cmd) { return spawnSync("sh", ["-c", "command -v " + cmd]).status === 0 }
 
 let server, base, tmp, env
@@ -337,10 +338,40 @@ test("the notification helper fails when no notification service answers, so the
 })
 
 const UNINSTALL = path.join(__dirname, "..", "uninstall.sh")
-function uninstall(extra) {
+// Stand-ins for omarchy and omarchy-shell. The file shell-mode says how the
+// shell behaves: ok (disable turns the plugin off), noshell (not running),
+// stuck (the plugin stays on) or absent (the shell does not know it).
+const fakeBin = function() {
+  const bin = path.join(tmp, "omarchy-bin")
+  if (!fs.existsSync(bin)) {
+    fs.mkdirSync(bin, { recursive: true })
+    const state = path.join(tmp, "shell-state")
+    fs.writeFileSync(path.join(bin, "omarchy"), [
+      "#!/bin/sh",
+      'mode="$(cat ' + path.join(tmp, "shell-mode") + ' 2>/dev/null || echo ok)"',
+      '[ "$1 $2" = "plugin disable" ] || exit 2',
+      'if [ "$mode" = ok ]; then echo off > ' + state + '; exit 0; fi',
+      "exit 1"
+    ].join("\n") + "\n", { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, "omarchy-shell"), [
+      "#!/bin/sh",
+      'mode="$(cat ' + path.join(tmp, "shell-mode") + ' 2>/dev/null || echo ok)"',
+      '[ "$mode" = noshell ] && exit 1',
+      '[ "$2" = rescanPlugins ] && exit 0',
+      'if [ "$mode" = absent ]; then echo "[]"; exit 0; fi',
+      'on=true; [ "$mode" = ok ] && [ "$(cat ' + state + ' 2>/dev/null)" = off ] && on=false',
+      "printf '[{\"id\":\"io.github.sette7blo.omathor\",\"enabled\":%s},{\"id\":\"other\",\"enabled\":true}]\\n' \"$on\""
+    ].join("\n") + "\n", { mode: 0o755 })
+  }
+  return bin
+}
+function uninstall(extra, mode) {
   const home = path.join(tmp, "home")
   fs.mkdirSync(home, { recursive: true })
-  return spawnSync(UNINSTALL, [], { env: Object.assign({ HOME: home }, env, { HOME: home }, extra || {}), encoding: "utf8", timeout: 120000 })
+  fs.writeFileSync(path.join(tmp, "shell-mode"), (mode || "ok") + "\n")
+  fs.rmSync(path.join(tmp, "shell-state"), { force: true })
+  const PATH = fakeBin() + ":" + process.env.PATH
+  return spawnSync(UNINSTALL, [], { env: Object.assign({}, env, { HOME: home, PATH: PATH }, extra || {}), encoding: "utf8", timeout: 120000 })
 }
 const lockFile = function() { return path.join(env.XDG_RUNTIME_DIR, "omathor", "lock") }
 
@@ -376,8 +407,13 @@ test("uninstall waits for a running refresh, and fails without deleting if it do
   assert.equal(code, 0, "the refresh was waited for, not stopped")
   assert.equal(fs.existsSync(stateDir()), false)
 
-  // A command that does not finish in time: nothing is deleted, and it says so.
+  // A command that does not finish in time: nothing is deleted, not even the
+  // links, and it says so.
   ok(["prepare"])
+  const cliLink = path.join(tmp, "home", ".local", "bin", "omathor")
+  fs.mkdirSync(path.dirname(cliLink), { recursive: true })
+  fs.rmSync(cliLink, { force: true })
+  fs.symlinkSync(fs.realpathSync(CLI), cliLink)
   const holder = spawn("flock", ["-s", lockFile(), "sleep", "5"], { stdio: "ignore", detached: true })
   await new Promise(function(done) { setTimeout(done, 300) })
   const late = uninstall({ OMATHOR_UNINSTALL_WAIT: "1" })
@@ -385,8 +421,10 @@ test("uninstall waits for a running refresh, and fails without deleting if it do
   process.kill(-holder.pid)
   await new Promise(function(done) { setTimeout(done, 200) })
   assert.equal(late.status, 1)
-  assert.match(late.stdout, /still running; .* was left. Run this again/)
+  assert.match(late.stdout, /still running; nothing was removed/)
   assert.ok(fs.existsSync(stateDir()))
+  assert.ok(fs.lstatSync(cliLink).isSymbolicLink(), "the command link is still there")
+  fs.rmSync(cliLink, { force: true })
 })
 
 test("an uninstall from another boot, or one older than the command, does not stop it", function() {
@@ -400,6 +438,44 @@ test("an uninstall from another boot, or one older than the command, does not st
   ok(["prepare"])
   fs.writeFileSync(stamp, "garbage\n")
   ok(["prepare"])
+})
+
+test("uninstall removes nothing unless the plugin is confirmed off", function() {
+  ok(["prepare"])
+  const cliLink = path.join(tmp, "home", ".local", "bin", "omathor")
+  fs.mkdirSync(path.dirname(cliLink), { recursive: true })
+  fs.rmSync(cliLink, { force: true })
+  fs.symlinkSync(fs.realpathSync(CLI), cliLink)
+  for (const mode of ["noshell", "stuck"]) {
+    const r = uninstall(null, mode)
+    assert.equal(r.status, 1, mode)
+    assert.match(r.stdout, /could not turn io.github.sette7blo.omathor off .* nothing was removed/, mode)
+    assert.ok(fs.existsSync(stateDir()), mode + ": the data is still there")
+    assert.ok(fs.lstatSync(cliLink).isSymbolicLink(), mode + ": the command link is still there")
+  }
+  // Without omarchy at all, nothing is removed either.
+  const bare = spawnSync(UNINSTALL, [], { env: Object.assign({}, env, { HOME: path.join(tmp, "home"), PATH: "/usr/bin:/bin" }), encoding: "utf8" })
+  if (spawnSync("sh", ["-c", "command -v omarchy"], { env: { PATH: "/usr/bin:/bin" } }).status !== 0) {
+    assert.equal(bare.status, 1)
+    assert.ok(fs.existsSync(stateDir()))
+  }
+  // A clone the shell does not know: nothing to turn off, so it goes ahead.
+  const r = uninstall(null, "absent")
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(fs.existsSync(stateDir()), false)
+  assert.equal(fs.existsSync(cliLink), false)
+})
+
+test("uninstall fails if something writes the folder again right after", async function() {
+  ok(["prepare"])
+  // Something that keeps creating the folder, as a late writer would.
+  const writer = spawn("sh", ["-c", 'for i in $(seq 60); do mkdir -p "$1"; sleep 0.05; done', "sh", stateDir()], { stdio: "ignore" })
+  const r = uninstall()
+  writer.kill()
+  await sleep(200)
+  assert.equal(r.status, 1, r.stdout)
+  assert.match(r.stdout, /written again while it was removed. Run this again/)
+  fs.rmSync(stateDir(), { recursive: true, force: true })
 })
 
 // Last: it removes the saved data the tests above rely on.

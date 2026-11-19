@@ -226,9 +226,12 @@ are saved, and every value is cleaned before it is shown. THORNames are read
 only as described under [THORNames](#thornames). Bond and node addresses and
 THORNames never appear in a process's arguments, where other accounts on
 the computer could read them: the panel hands them to `omathor` on stdin,
-and request addresses reach `curl` in its configuration on stdin. An address
-removed from the settings is not looked up any more, and a lookup that was
-already running for it leaves no record behind. Your own THORNode
+request addresses reach `curl` in its configuration on stdin, and
+notifications go to the notification service over D-Bus rather than through
+`notify-send`'s arguments (if that fails, a notice that names nothing is sent
+instead). An address or THORName removed from the settings is not looked up
+any more, and a lookup that was already running for it leaves no record
+behind. Your own THORNode
 and Midgard can be set in the settings: https, or plain http only to this
 computer or a private network.
 
@@ -245,12 +248,15 @@ omarchy plugin remove io.github.sette7blo.omathor
 From a clone, run `./uninstall.sh` in the clone instead.
 
 The uninstaller turns the plugin off, which drops its bar entry and with it
-the settings (your bond addresses, THORNames, endpoints), stops any omathor
-command still running, removes the `omathor` command and launcher links that
-point into the plugin, and deletes everything omathor saved in
-`~/.local/state/omarchy/omathor/`. If something could not be stopped or wrote
-to that folder again, it says so and exits with an error: run it again. The
-folder holds:
+the settings (your bond addresses, THORNames, endpoints), removes the
+`omathor` command and launcher links that point into the plugin, waits for
+any omathor command still running to finish (up to 90 seconds; it stops no
+process), and deletes everything omathor saved in
+`~/.local/state/omarchy/omathor/`. If a command is still running after that,
+nothing is deleted and it says so: run it again. It leaves a small lock file
+and the time of the uninstall in `$XDG_RUNTIME_DIR/omathor/`, which is
+emptied when you log out or restart; a command that was waiting for the
+uninstall exits without writing anything. The folder holds:
 
 | File | What it holds |
 |---|---|

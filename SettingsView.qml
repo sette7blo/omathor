@@ -108,7 +108,7 @@ Column {
       spacing: Style.spacing.md
       visible: root.options.addresses.length < 10
 
-      TextField {
+      GuardedTextField {
         id: addressField
         Layout.fillWidth: true
         placeholderText: "thor1…"
@@ -215,7 +215,7 @@ Column {
       spacing: Style.spacing.md
       visible: root.options.names.length < 20
 
-      TextField {
+      GuardedTextField {
         id: nameField
         Layout.fillWidth: true
         placeholderText: "Add a name by hand"
@@ -399,7 +399,7 @@ Column {
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
     }
-    TextField {
+    GuardedTextField {
       id: thornodeField
       width: parent.width
       placeholderText: "THORNode API, e.g. https://thornode.example"
@@ -408,7 +408,7 @@ Column {
       accent: root.accent
       Keys.onReturnPressed: root.saveEndpoints()
     }
-    TextField {
+    GuardedTextField {
       id: midgardField
       width: parent.width
       placeholderText: "Midgard, e.g. https://midgard.example"

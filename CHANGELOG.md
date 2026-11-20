@@ -6,6 +6,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The address, name and endpoint fields in Settings stay read-only until they have keyboard
+  focus. Qt reads the clipboard on every clipboard change for each editable text field, so a
+  slow or oversized clipboard offer from another app could stall the shell while Settings was
+  open; now only the field being typed in does that.
+
 ## [v0.1.9] - 2026-11-19
 
 ### Changed

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.sette7blo.omathor",
   "name": "Omathor for THORChain",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "author": "sette7blo",
   "license": "MIT",
   "description": "THORChain from the Omarchy bar: one bolt, coloured by how the network and your nodes are doing. Six tabs: network health, the next churn (halts respected), security and upgrades; your bonds per node with share, earnings, APY and churn-out risk; THORNames with expiry and pending affiliate fees; node votes on mimir; pools with depth, volume and APR; and connected chains. Read-only, no key or account. Each bond address is sent only once, to look up its THORNames.",

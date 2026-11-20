@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.10] - 2026-11-20
+
 ### Fixed
 - The address, name and endpoint fields in Settings stay read-only until they have keyboard
   focus. Qt reads the clipboard on every clipboard change for each editable text field, so a
@@ -162,7 +164,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.10...HEAD
+[v0.1.10]: https://github.com/sette7blo/omathor/compare/v0.1.9...v0.1.10
 [v0.1.9]: https://github.com/sette7blo/omathor/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/sette7blo/omathor/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/sette7blo/omathor/compare/v0.1.6...v0.1.7

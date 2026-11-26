@@ -5,7 +5,7 @@
   "version": "0.1.10",
   "author": "sette7blo",
   "license": "MIT",
-  "description": "THORChain from the Omarchy bar: one bolt, coloured by how the network and your nodes are doing. Six tabs: network health, the next churn (halts respected), security and upgrades; your bonds per node with share, earnings, APY and churn-out risk; THORNames with expiry and pending affiliate fees; node votes on mimir; pools with depth, volume and APR; and connected chains. Read-only, no key or account. Each bond address is sent only once, to look up its THORNames.",
+  "description": "THORChain from the Omarchy bar: one bolt, coloured by how the network and your nodes are doing. Seven tabs: network health, the next churn (halts respected), security and upgrades; your bonds per node with share, earnings, APY and churn-out risk; THORNames with expiry and affiliate fees; node votes on mimir; upcoming THORNode releases from GitLab; pools with depth, volume and APR; and connected chains. Read-only, no key or account. Each bond address is sent only once, to look up its THORNames.",
   "homepage": "https://github.com/sette7blo/omathor",
   "funding": { "monero": "42iX2Knyef7Wi4rZxcWMw84DY7x1HUk67LKCqiqB1r5eLicJFvGbpCzUSiAqV8rGzbPW6yzmSGE93ZikU3PUkwnvQopggMB" },
   "kinds": [
@@ -19,7 +19,7 @@
   },
   "barWidget": {
     "displayName": "Omathor",
-    "description": "A bolt coloured by THORChain's health and your bonded nodes, with a panel for the network, bonds, THORNames, votes, pools and chains.",
+    "description": "A bolt coloured by THORChain's health and your bonded nodes, with a panel for the network, bonds, THORNames, votes, releases, pools and chains.",
     "category": "System",
     "aliases": [
       "omathor",

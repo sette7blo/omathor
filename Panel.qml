@@ -8,11 +8,12 @@ import qs.Ui
 import "qml"
 import "Model.js" as Model
 
-// One panel: a header, six tabs, and the settings behind the gear. The
+// One panel: a header, seven tabs, and the settings behind the gear. The
 // network tab leads with the churn as one big readout, then small labelled
 // readings; the bonds tab has a card per node, the names tab a card per
-// THORName, the votes tab the node votes closest to passing, the pools tab
-// a compact row per pool, and the chains tab a grid.
+// THORName, the votes tab the node votes closest to passing, the releases
+// tab a card per upcoming THORNode milestone, the pools tab a compact row
+// per pool, and the chains tab a grid.
 // Everything shown comes from the service's summary; the panel never fetches.
 Panel {
   id: root
@@ -46,6 +47,7 @@ Panel {
   readonly property var chains: Model.chainsView(summary)
   readonly property var names: Model.namesView(summary, options, summary ? summary.computedAt : 0)
   readonly property var votes: Model.votesView(summary, summary ? summary.computedAt : 0)
+  readonly property var releases: Model.releasesView(summary, summary ? summary.computedAt : 0)
   property bool showAllPools: false
   readonly property var pools: Model.poolsView(summary, options, showAllPools)
   readonly property var targets: Model.bondTargets(bonds)
@@ -68,6 +70,7 @@ Panel {
     root.selectedNode = ""
     scroller.contentY = 0
     if (name === "votes" && root.service) root.service.fetchVotes(false)
+    if (name === "releases" && root.service) root.service.fetchReleases(false)
   }
 
   function moveSelection(delta) {
@@ -77,11 +80,13 @@ Panel {
     root.selectedNode = root.targets[i]
   }
 
-  // Only the explorer and THORNode's ADR documents are ever opened.
+  // Only the explorer, THORNode's ADR documents and its merge requests are
+  // ever opened.
   function openUrl(url) {
     if (!url) return
     if (url.indexOf("https://thorchain.net/") !== 0
-      && url.indexOf("https://gitlab.com/thorchain/thornode/-/blob/develop/docs/architecture/") !== 0) return
+      && url.indexOf("https://gitlab.com/thorchain/thornode/-/blob/develop/docs/architecture/") !== 0
+      && url.indexOf("https://gitlab.com/thorchain/thornode/-/merge_requests") !== 0) return
     Util.execArgv(["xdg-open", url])
   }
 
@@ -93,6 +98,7 @@ Panel {
     if (!root.service) return
     root.service.fetch(true)
     if (root.tab === "votes") root.service.fetchVotes(true)
+    if (root.tab === "releases") root.service.fetchReleases(true)
   }
 
   // Keeps the selected card in view.
@@ -130,6 +136,7 @@ Panel {
       }
       Qt.callLater(function() { keys.forceActiveFocus() })
       if (root.tab === "votes" && root.service) root.service.fetchVotes(false)
+      if (root.tab === "releases" && root.service) root.service.fetchReleases(false)
     }
   }
 
@@ -177,8 +184,10 @@ Panel {
         } else if (letter === "4") {
           root.selectTab("votes")
         } else if (letter === "5") {
-          root.selectTab("pools")
+          root.selectTab("releases")
         } else if (letter === "6") {
+          root.selectTab("pools")
+        } else if (letter === "7") {
           root.selectTab("chains")
         } else if (letter === ",") {
           root.showSettings = true
@@ -1354,6 +1363,256 @@ Panel {
             }
           }
 
+          // ================= Releases =================
+          Column {
+            id: releasesBlock
+            width: parent.width
+            spacing: Style.spacing.lg
+            visible: root.tab === "releases"
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: root.releases === null
+              text: root.service && root.service.releasesBusy ? "Reading the milestones from GitLab."
+                : (root.service && root.service.releasesError ? "No releases: " + root.service.releasesError : "No releases read yet.")
+              color: root.dim
+              wrapMode: Text.WordWrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Grid {
+              id: releasesGrid
+              width: parent.width
+              columns: 3
+              columnSpacing: Style.spacing.xxl
+              visible: root.releases !== null
+
+              Repeater {
+                model: root.releases ? root.releases.tiles : []
+                delegate: StatTile {
+                  required property var modelData
+                  width: (releasesGrid.width - releasesGrid.columnSpacing * 2) / 3
+                  tile: modelData
+                  foreground: root.foreground
+                  warnColor: root.warnColor
+                  fontFamily: root.fontFamily
+                  valueSize: Style.font.heading
+                }
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: root.releases !== null
+              text: root.releases && root.releases.milestones.length ? "UPCOMING MILESTONES" : "NO MILESTONE ABOVE THE NETWORK'S VERSION"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+
+            Repeater {
+              model: root.releases ? root.releases.milestones : []
+              delegate: Item {
+                id: releaseCard
+                required property var modelData
+                width: releasesBlock.width
+                implicitHeight: releaseBody.implicitHeight + Style.spacing.lg * 2
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: Style.cornerRadius
+                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+                }
+
+                Column {
+                  id: releaseBody
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.spacing.lg
+                  anchors.rightMargin: Style.spacing.lg
+                  spacing: Style.space(4)
+
+                  RowLayout {
+                    width: parent.width
+                    spacing: Style.spacing.lg
+
+                    Text {
+                      textFormat: Text.PlainText
+                      Layout.fillWidth: true
+                      text: releaseCard.modelData.title
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                      maximumLineCount: 1
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: releaseCard.modelData.count
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                  }
+
+                  Rectangle {
+                    width: parent.width
+                    height: Style.space(3)
+                    radius: height / 2
+                    color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+
+                    Rectangle {
+                      width: parent.width * Math.max(0, Math.min(1, releaseCard.modelData.progress))
+                      height: parent.height
+                      radius: parent.radius
+                      color: root.levelColor(releaseCard.modelData.level)
+                    }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: releaseCard.modelData.state
+                    color: root.levelColor(releaseCard.modelData.level)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: releaseCard.modelData.detail
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                  }
+
+                  Repeater {
+                    model: releaseCard.modelData.flagged
+                    delegate: Item {
+                      id: flagRow
+                      required property var modelData
+                      width: releaseBody.width
+                      implicitHeight: flagText.implicitHeight + flagWhy.implicitHeight + Style.space(4)
+
+                      Text {
+                        id: flagText
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        text: flagRow.modelData.text
+                        color: flagMouse.containsMouse ? root.accent : root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                      }
+                      Text {
+                        id: flagWhy
+                        anchors.top: flagText.bottom
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        text: flagRow.modelData.flags
+                        color: flagRow.modelData.alert ? root.warnColor : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                      }
+                      MouseArea {
+                        id: flagMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.openUrl(flagRow.modelData.url)
+                      }
+                    }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    visible: releaseCard.modelData.url !== ""
+                    text: (releaseCard.modelData.more ? releaseCard.modelData.more + "  ·  " : "") + "View all open on GitLab"
+                    color: allMouse.containsMouse ? root.accent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+
+                    MouseArea {
+                      id: allMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.openUrl(releaseCard.modelData.url)
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: !!root.releases && root.releases.latest !== null
+              text: "LATEST RELEASE"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: !!root.releases && root.releases.latest !== null
+              text: root.releases && root.releases.latest ? root.releases.latest.title : ""
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+              maximumLineCount: 1
+            }
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: text !== ""
+              text: root.releases && root.releases.latest ? root.releases.latest.text : ""
+              color: root.dim
+              wrapMode: Text.WordWrap
+              maximumLineCount: 2
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            PanelSeparator {
+              foreground: root.foreground
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: text !== ""
+              text: root.service && root.service.releasesError && root.releases !== null
+                ? "Last read failed: " + root.service.releasesError
+                : (root.releases ? root.releases.asOf + (root.service && root.service.releasesBusy ? ", reading again" : "") : "")
+              color: root.service && root.service.releasesError ? Commons.Color.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              maximumLineCount: 1
+            }
+          }
+
           // ================= Pools =================
           Column {
             id: poolsBlock
@@ -1583,7 +1842,7 @@ Panel {
         visible: !root.showSettings
         text: root.tab === "bond"
           ? "tab next   j k select node   enter explorer   r fetch   , settings"
-          : "tab next   1-6 tabs   r fetch   , settings"
+          : "tab next   1-7 tabs   r fetch   , settings"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

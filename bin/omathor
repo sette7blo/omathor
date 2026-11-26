@@ -803,6 +803,148 @@ cmd_votes() {
   esac
 }
 
+# --- Releases ----------------------------------------------------------------
+# THORNode's merge requests carry a milestone named Release-X.Y.Z. GitLab's
+# GraphQL API answers without a token and returns only the fields asked for;
+# its REST list of merge requests carries every description (over 1 MB).
+
+GITLAB_GRAPHQL_DEFAULT="https://gitlab.com/api/graphql"
+RELEASES="$STATE_DIR/releases.json"
+# The milestones above the network's version, oldest first; no more than this.
+RELEASES_SHOWN=6
+RELEASES_PER_QUERY=3
+
+graphql_url() {
+  local custom="${OMATHOR_GITLAB_GRAPHQL:-}"
+  if [[ -n "$custom" ]]; then
+    valid_base "$custom" || die "OMATHOR_GITLAB_GRAPHQL is not a valid https address: $custom"
+    printf '%s' "$custom"
+    return
+  fi
+  printf '%s' "$GITLAB_GRAPHQL_DEFAULT"
+}
+
+# post_json <url> <file>: the body of a JSON POST of the file. The same
+# limits as get; the address and the file name go through curl's config.
+post_json() {
+  local bad='["\\[:cntrl:]]'
+  [[ ! "$2" =~ $bad ]] || die "not a usable file name: $2"
+  { url_config "$1"; printf 'data-binary = "@%s"\n' "$2"; } \
+    | http_request -fsS -m 25 --connect-timeout 8 --max-filesize "$MAX_BYTES" --compressed \
+      --proto '=http,https' -H 'Accept: application/json' -H 'Content-Type: application/json' -K -
+}
+
+# GraphQL answers 200 with only "errors" when a query fails.
+graphql() {
+  local out
+  out="$(post_json "$GQL" "$1")" || return 1
+  jq -e '.data.project | type == "object"' <<<"$out" >/dev/null 2>&1 || return 1
+  printf '%s' "$out"
+}
+
+RELEASES_QUERY='query { project(fullPath: "thorchain/thornode") {
+  milestones(state: active, first: 100) { nodes { title } }
+  releases(first: 5, sort: RELEASED_AT_DESC) { nodes { tagName releasedAt description } }
+} }'
+
+# One pair of aliases per milestone: its open merge requests and how many
+# were merged.
+milestone_query() {
+  local i q='query('
+  for ((i = 0; i < $1; i++)); do q+="\$t$i: String!, "; done
+  q="${q%, }) { project(fullPath: \"thorchain/thornode\") {"
+  for ((i = 0; i < $1; i++)); do
+    q+=" o$i: mergeRequests(state: opened, milestoneTitle: \$t$i, first: 100) { count nodes { iid title draft detailedMergeStatus updatedAt labels(first: 20) { nodes { title } } } }"
+    q+=" m$i: mergeRequests(state: merged, milestoneTitle: \$t$i) { count }"
+  done
+  printf '%s } }' "$q"
+}
+
+# Text from GitLab: one line, no control characters, capped.
+TEXT_DEF='def line($n): (. // "" | tostring | gsub("[[:cntrl:]]+"; " ") | gsub("\\s+"; " ") | sub("^ "; "") | .[0:$n]);'
+
+TRIM_MILESTONES='[ .data.project.milestones.nodes[]? | .title? // "" | tostring
+  | select(test("^Release-[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$")) ] | unique'
+
+TRIM_RELEASES="$TEXT_DEF"'[ .data.project.releases.nodes[]? | select(type == "object") | {
+    tag: (.tagName // "" | tostring | if test("^v?[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(-[A-Za-z0-9.]{1,20})?$") then . else "" end),
+    at: ((.releasedAt // "" | tostring | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0)),
+    # The notes are markdown; the first lines are enough to tell what kind of release it is.
+    notes: ([ (.description // "" | tostring | .[0:4000] | split("\n"))[] | line(200) | select(. != "") ][:6])
+  } | select(.tag != "") ][:5]'
+
+TRIM_MRS="$TEXT_DEF"'[ range(0; $n) as $i | {
+    title: $titles[$i],
+    open: (.data.project["o\($i)"].count // 0 | tonumber? // 0),
+    merged: (.data.project["m\($i)"].count // 0 | tonumber? // 0),
+    mrs: [ .data.project["o\($i)"].nodes[]? | select(type == "object") | {
+        iid: (.iid // "" | tostring | if test("^[0-9]{1,7}$") then tonumber else 0 end),
+        title: (.title | line(160)),
+        draft: (.draft == true),
+        status: (.detailedMergeStatus // "" | tostring | if test("^[A-Z_]{1,40}$") then . else "" end),
+        updated: ((.updatedAt // "" | tostring | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0)),
+        labels: [ .labels.nodes[]? | .title? // "" | tostring | select(test("^(security|priority::[0-9])$")) ]
+      } | select(.iid > 0) ]
+  } ]'
+
+releases_fetch() {
+  need curl; need jq
+  GQL="$(graphql_url)"
+  prepare
+  WORK="$(mktemp -d -p "$STATE_DIR" .releases.XXXXXX)"
+  trap 'rm -rf "$WORK"' EXIT
+  local current=""
+  [[ -r "$SNAPSHOT" ]] && current="$(jq -r '.thorVersion.current // "" | tostring | select(test("^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$"))' "$SNAPSHOT" 2>/dev/null || true)"
+
+  jq -n -c --arg q "$RELEASES_QUERY" '{query: $q}' > "$WORK/q1.json"
+  graphql "$WORK/q1.json" > "$WORK/r1.json" || die "GitLab did not answer for the milestones"
+  jq -c "$TRIM_RELEASES" "$WORK/r1.json" > "$WORK/releases.json" 2>/dev/null || die "GitLab sent releases that are not usable"
+
+  # Above the network's version, oldest first; without a version, the
+  # newest ones.
+  local titles
+  titles="$(jq -c --arg cur "$current" --argjson max "$RELEASES_SHOWN" "$TRIM_MILESTONES"' as $all
+    | def v: sub("^Release-"; "") | split(".") | map(tonumber);
+      ($cur | if . == "" then null else split(".") | map(tonumber) end) as $c
+    | [ $all[] | select($c == null or (v > $c)) ] | sort_by(v)
+    | if $c == null then .[-$max:] else .[:$max] end' "$WORK/r1.json" 2>/dev/null)" || die "GitLab sent milestones that are not usable"
+  local n
+  n="$(jq 'length' <<<"$titles")"
+
+  # GitLab refuses a query above a complexity of 200, about 40 per
+  # milestone here: a few milestones per request.
+  local from part k
+  for ((from = 0; from < n; from += RELEASES_PER_QUERY)); do
+    part="$(jq -c --argjson f "$from" --argjson c "$RELEASES_PER_QUERY" '.[$f:$f + $c]' <<<"$titles")"
+    k="$(jq 'length' <<<"$part")"
+    jq -n -c --arg q "$(milestone_query "$k")" --argjson t "$part" \
+      '{query: $q, variables: (reduce range(0; $t | length) as $i ({}; .["t\($i)"] = $t[$i]))}' > "$WORK/q2.json"
+    graphql "$WORK/q2.json" > "$WORK/r2.json" || die "GitLab did not answer for the merge requests"
+    jq -c --argjson titles "$part" --argjson n "$k" "$TRIM_MRS" "$WORK/r2.json" > "$WORK/m$from.json" 2>/dev/null \
+      || die "GitLab sent merge requests that are not usable"
+  done
+  if (( n > 0 )); then jq -s -c 'add' "$WORK"/m[0-9]*.json > "$WORK/milestones.json"; else printf '[]' > "$WORK/milestones.json"; fi
+
+  local tmp
+  tmp="$(mktemp -p "$STATE_DIR" .tmp.XXXXXX)"
+  jq -n -c --argjson now "$(date +%s)" --arg cur "$current" \
+    --slurpfile m "$WORK/milestones.json" --slurpfile r "$WORK/releases.json" \
+    '{fetchedAt: $now, current: $cur, milestones: $m[0], releases: $r[0]}' > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$RELEASES"
+  echo "read $n milestone$( (( n == 1 )) || echo s) above ${current:-any version}"
+}
+
+cmd_releases() {
+  local sub="${1:-show}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    show) print_section releases ;;
+    fetch) releases_fetch ;;
+    *) die "releases takes show or fetch" ;;
+  esac
+}
+
 # --- Reading the summary ---------------------------------------------------
 
 require_summary() {
@@ -818,7 +960,7 @@ require_summary() {
 print_section() {
   require_summary
   if $JSON; then
-    jq --arg s "$1" 'if $s == "bonds" or $s == "chains" or $s == "names" or $s == "votes" or $s == "pools" then .[$s] else del(.text) end' "$SUMMARY"
+    jq --arg s "$1" 'if $s == "bonds" or $s == "chains" or $s == "names" or $s == "votes" or $s == "pools" or $s == "releases" then .[$s] else del(.text) end' "$SUMMARY"
   else
     jq -r --arg s "$1" '.text[$s] // [] | .[]' "$SUMMARY"
   fi
@@ -846,7 +988,7 @@ cmd_panel() {
     omarchy-shell shell toggle "$PLUGIN_ID" '{}' >/dev/null
     return
   fi
-  [[ "$tab" =~ ^(network|bonds?|names|votes|pools|chains)$ ]] || die "panel takes network, bonds, names, votes, pools or chains"
+  [[ "$tab" =~ ^(network|bonds?|names|votes|releases|pools|chains)$ ]] || die "panel takes network, bonds, names, votes, releases, pools or chains"
   [[ "$tab" == bonds ]] && tab=bond
   omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null
   omarchy-shell "$PLUGIN_ID.panel" tab "$tab" >/dev/null
@@ -865,6 +1007,9 @@ Usage: omathor [--json] <command>
   votes      node votes on mimir settings closest to passing, and ADRs
   votes fetch [node…]
              read the votes; the nodes given are matched locally
+  releases   upcoming THORNode releases: GitLab milestones and their merge requests
+  releases fetch
+             read the milestones above the network's version from GitLab
   names forget <name or thor1…>
              drop saved name data, or the record that an address was searched
   names refresh [name…]
@@ -915,6 +1060,7 @@ main() {
     pools)   print_section pools ;;
     names)   cmd_names "$@" ;;
     votes)   cmd_votes "$@" ;;
+    releases) cmd_releases "$@" ;;
     refresh) cmd_refresh ;;
     fetch)   cmd_fetch "$@" ;;
     panel)   cmd_panel "$@" ;;

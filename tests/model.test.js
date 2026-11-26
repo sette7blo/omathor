@@ -443,8 +443,8 @@ test("each bond address is searched for names once", function() {
   assert.deepEqual(M.namesToSearch(o, { searched: { [ME]: 1 } }, { [OP]: true }), [])
 })
 
-test("six tabs, in key order", function() {
-  assert.deepEqual(M.tabs(null).map(function(t) { return t.label }), ["Network", "Bonds", "Names", "Votes", "Pools", "Chains"])
+test("seven tabs, in key order", function() {
+  assert.deepEqual(M.tabs(null).map(function(t) { return t.label }), ["Network", "Bonds", "Names", "Votes", "Releases", "Pools", "Chains"])
   assert.equal(M.nextTab("bond", 1), "names")
   assert.equal(M.nextTab("network", -1), "chains")
 })
@@ -640,4 +640,97 @@ test("contract and other-chain addresses among bond providers are kept", functio
   const s = M.summarize(snap({ nodes: [node(NODE, { operator: "tbnb1zgnzmv56r2kfdh7r2zgesxcv86xrj5x52qwuvw", providers: [{ address: CONTRACT, bond: 3e13 }, { address: ME, bond: 1e13 }] })] }), { addresses: [ME] }, NOW)
   assert.equal(s.bonds[0].nodes.length, 1)
   assert.equal(s.bonds[0].bond, 1e13)
+})
+
+// ----- Releases -----
+
+// Nodes are voting on 3.22.0.
+function voting() {
+  return snap({ upgrades: [{ name: "3.22.0", height: 200000, approved: false, percent: 0.4, toQuorum: 20 }] })
+}
+
+function releasesData(extra) {
+  const day = 86400
+  const now = NOW / 1000
+  return Object.assign({
+    fetchedAt: now - 60,
+    current: "3.21.5",
+    milestones: [
+      { title: "Release-3.21.0", open: 1, merged: 9, mrs: [{ iid: 1, title: "old", labels: ["security"], updated: now }] },
+      { title: "Release-3.23.0", open: 3, merged: 1, mrs: [
+        { iid: 10, title: "plain work", draft: false, status: "NOT_APPROVED", updated: now - day, labels: [] },
+        { iid: 11, title: "a draft", draft: true, status: "DRAFT_STATUS", updated: now - day, labels: [] },
+        { iid: 12, title: "fix\u0001 the\nvault", draft: false, status: "CONFLICT", updated: now - 40 * day, labels: ["security", "priority::2"] }
+      ] },
+      { title: "Release-3.22.0", open: 0, merged: 106, mrs: [] },
+      { title: "Release-3.22.1", open: 0, merged: 0, mrs: [] },
+      { title: "Release-3.21.9", open: 0, merged: 4, mrs: [] },
+      { title: "Release-4.0.0", open: 2, merged: 5, mrs: [
+        { iid: "javascript:alert(1)", title: "bad id", labels: ["security"], updated: now },
+        { iid: 20, title: "low", labels: ["priority::4"], updated: now }
+      ] },
+      { title: "Not a release", open: 5, merged: 5, mrs: [] }
+    ],
+    releases: [
+      { tag: "v3.22.0-rc1", at: now - day, notes: ["Stagenet candidate"] },
+      { tag: "v3.21.9", at: now - 2 * day, notes: ["## thornode 3.21.9", "Bifrost-only maintenance release (no consensus change)."] }
+    ]
+  }, extra || {})
+}
+
+test("releases: only milestones above the network's version, with their state", function() {
+  const s = M.summarize(voting(), {}, NOW, null, null, releasesData())
+  const r = s.releases
+  assert.equal(r.current, "3.21.5")
+  assert.deepEqual(r.milestones.map(function(m) { return m.version + ":" + m.state }),
+    ["3.21.9:tagged", "3.22.0:voting", "3.23.0:work", "4.0.0:work"],
+    "older milestones, empty ones and other titles are left out; oldest first")
+  assert.equal(r.milestones[1].percent, 0.4, "the upgrade proposal named 3.22.0 is matched")
+  assert.equal(r.latest.tag, "v3.21.9", "a release candidate is not the latest release")
+  assert.equal(r.latest.bifrostOnly, true)
+  assert.equal(r.latest.headline, "Bifrost-only maintenance release (no consensus change).")
+})
+
+test("releases: all merged and untagged, and rolling out", function() {
+  const data = releasesData({ releases: [] })
+  const plain = M.summarize(snap({ upgrades: [] }), {}, NOW, null, null, data)
+  assert.equal(plain.releases.milestones.find(function(m) { return m.version === "3.22.0" }).state, "ready")
+  assert.equal(plain.releases.milestones.find(function(m) { return m.version === "3.21.9" }).state, "ready")
+  const s = snap({ upgrades: [] })
+  s.nodes[0].version = "3.22.0"
+  const rolling = M.summarize(s, {}, NOW, null, null, data).releases.milestones.find(function(m) { return m.version === "3.22.0" })
+  assert.equal(rolling.state, "rolling")
+  assert.equal(rolling.running, 1)
+})
+
+test("releases: flagged merge requests, plain text and links from checked numbers", function() {
+  const s = M.summarize(snap(), {}, NOW, null, null, releasesData())
+  const m = s.releases.milestones.find(function(x) { return x.version === "3.23.0" })
+  assert.equal(m.drafts, 1)
+  assert.deepEqual(m.flagged.map(function(f) { return f.iid }), [12], "only flagged ones are listed")
+  assert.deepEqual(m.flagged[0].flags, ["security", "priority 2", "conflict", "idle 40 days"])
+  assert.equal(m.flagged[0].title, "fix the vault")
+  assert.equal(m.flagged[0].url, "https://gitlab.com/thorchain/thornode/-/merge_requests/12")
+  assert.equal(m.url, "https://gitlab.com/thorchain/thornode/-/merge_requests?scope=all&state=opened&milestone_title=Release-3.23.0")
+  const major = s.releases.milestones.find(function(x) { return x.version === "4.0.0" })
+  assert.deepEqual(major.flagged, [], "a merge request without a plain number gets no link and is not listed")
+})
+
+test("releases: view and command lines", function() {
+  const s = M.summarize(voting(), {}, NOW, null, null, releasesData())
+  const v = M.releasesView(s, NOW)
+  assert.deepEqual(v.tiles.map(function(t) { return t.label + "=" + t.value }), ["Network runs=3.21.5", "Next=3.21.9", "GitLab release=v3.21.9"])
+  assert.equal(v.milestones[1].state, "Nodes are voting on the upgrade: 40%")
+  assert.equal(v.milestones[2].count, "1 / 4")
+  assert.equal(v.milestones[2].flagged[0].alert, true)
+  assert.equal(v.asOf, "Read 1m ago from GitLab")
+  assert.match(s.text.releases.join("\n"), /3\.23\.0: 1 merged, 3 open \(1 draft\)\. In progress\n  !12 fix the vault \[security, priority 2, conflict, idle 40 days\]/)
+  assert.equal(M.releasesView(M.summarize(snap(), {}, NOW), NOW), null)
+  assert.match(M.summarize(snap(), {}, NOW).text.releases[0], /No releases read yet/)
+})
+
+test("releases are read again after six hours", function() {
+  assert.equal(M.releasesDue(null, NOW), true)
+  assert.equal(M.releasesDue({ fetchedAt: NOW / 1000 - 3600 }, NOW), false)
+  assert.equal(M.releasesDue({ fetchedAt: NOW / 1000 - 6 * 3600 }, NOW), true)
 })

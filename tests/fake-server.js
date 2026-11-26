@@ -117,8 +117,54 @@ const routes = {
   }
 }
 
+// GitLab's GraphQL: the milestones and releases, then the merge requests of
+// the milestones asked for (aliases o0/m0, o1/m1, ...).
+const GITLAB_MILESTONES = ["Release-3.21.0", "Release-3.22.0", "Release-3.23.0", "Release-4.0.0", "Release-3.21.6", "Release-3.21.7",
+  "Release-3.21.8", "Release-3.21.9", "Not-a-release", "Release-3.22.0\"; drop"]
+function graphqlAnswer(body) {
+  const q = String(body.query || "")
+  if (q.indexOf("milestones(") !== -1) {
+    return { data: { project: {
+      milestones: { nodes: GITLAB_MILESTONES.map(function(t) { return { title: t } }) },
+      releases: { nodes: [
+        { tagName: "v3.21.2", releasedAt: "2026-11-07T07:39:50.203Z", description: "## thornode 3.21.2\n\nBifrost-only maintenance release (no consensus change).\n" + "x".repeat(9000) },
+        { tagName: "<b>v9</b>", releasedAt: "2026-11-01T00:00:00Z", description: "bad tag" }
+      ] }
+    } } }
+  }
+  const project = {}
+  const vars = body.variables || {}
+  Object.keys(vars).forEach(function(k) {
+    const i = k.slice(1)
+    const t = vars[k]
+    project["m" + i] = { count: t === "Release-3.22.0" ? 106 : 2 }
+    project["o" + i] = t === "Release-3.23.0"
+      ? { count: 3, nodes: [
+        { iid: "5425", title: "Add\u0007 NYM <b>token</b>\n" + "y".repeat(400), draft: false, detailedMergeStatus: "CONFLICT", updatedAt: "2026-11-25T11:11:14Z", labels: { nodes: [{ title: "security" }, { title: "priority::2" }, { title: "<script>" }] }, webUrl: "https://evil.example/" },
+        { iid: "../5", title: "bad id", draft: false, detailedMergeStatus: "mergeable", updatedAt: "x", labels: { nodes: [] } },
+        { iid: "5410", title: "a draft", draft: true, detailedMergeStatus: "DRAFT_STATUS", updatedAt: "2026-11-26T05:15:09Z", labels: { nodes: [] } }
+      ] }
+      : { count: 0, nodes: [] }
+  })
+  return { data: { project: project } }
+}
+
 const server = http.createServer(function(req, res) {
   const url = new URL(req.url, "http://localhost")
+  if (url.pathname === "/graphql" && req.method === "POST" && mode !== "down" && mode !== "slow") {
+    let body = ""
+    req.on("data", function(d) { body += d })
+    req.on("end", function() {
+      log.push("/graphql " + body)
+      res.setHeader("Content-Type", "application/json")
+      let parsed = {}
+      try { parsed = JSON.parse(body) } catch (e) {}
+      if (mode === "gql-error") return res.end(JSON.stringify({ errors: [{ message: "Query has complexity of 241, which exceeds max complexity of 200" }] }))
+      if (mode === "gql-big") return res.end(JSON.stringify({ data: { project: { pad: "z".repeat(9000000) } } }))
+      res.end(JSON.stringify(graphqlAnswer(parsed)))
+    })
+    return
+  }
   if (url.pathname === "/__log") {
     res.setHeader("Content-Type", "application/json")
     res.end(JSON.stringify(log))

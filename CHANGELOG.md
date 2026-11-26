@@ -6,6 +6,15 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A Releases tab (`omathor releases`): the THORNode milestones above the version the network
+  runs, read from GitLab, with merged and open merge requests, the open ones worth a look
+  (security, priority, conflict, idle) and where each release stands, from in progress to
+  rolling out. Read only while the tab is open, at most every 6 hours.
+
+### Changed
+- The tab keys: `5` is now Releases, `6` Pools and `7` Chains.
+
 ## [v0.1.10] - 2026-11-20
 
 ### Fixed

@@ -723,6 +723,7 @@ test("releases: view and command lines", function() {
   assert.equal(v.milestones[1].state, "Nodes are voting on the upgrade: 40%")
   assert.equal(v.milestones[2].count, "1 / 4")
   assert.equal(v.milestones[2].flagged[0].alert, true)
+  assert.equal(v.milestones[1].url, "", "no link to the open list of a milestone with none open")
   assert.equal(v.asOf, "Read 1m ago from GitLab")
   assert.match(s.text.releases.join("\n"), /3\.23\.0: 1 merged, 3 open \(1 draft\)\. In progress\n  !12 fix the vault \[security, priority 2, conflict, idle 40 days\]/)
   assert.equal(M.releasesView(M.summarize(snap(), {}, NOW), NOW), null)

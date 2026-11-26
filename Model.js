@@ -1142,7 +1142,8 @@ function releasesView(sum, now) {
         return { text: "!" + f.iid + "  " + f.title, flags: f.flags.join("  ·  "), url: f.url, alert: f.flags.indexOf("security") !== -1 }
       }),
       more: m.moreFlagged ? m.moreFlagged + " more flagged" : "",
-      url: m.url
+      // Nothing open: nothing to list.
+      url: m.open ? m.url : ""
     }
   })
   var next = r.milestones.length ? r.milestones[0] : null

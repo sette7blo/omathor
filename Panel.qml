@@ -278,7 +278,8 @@ Panel {
         visible: !root.showSettings
         options: Model.tabs(root.summary)
         value: root.tab
-        fontSize: Style.font.bodySmall
+        // Seven tabs fit the panel's width only at the caption size.
+        fontSize: Style.font.caption
         focusable: false
         foreground: root.foreground
         accent: root.accent

@@ -67,7 +67,7 @@ USD. Left click opens the panel, right click fetches now.
 
 ## Panel
 
-Six tabs:
+Seven tabs:
 
 - **Network**: what needs attention, the churn (next, last, or why there is
   no countdown), block height, trading and bonding, vaults, the outbound
@@ -91,6 +91,8 @@ Six tabs:
 - **Names**: a card per THORName (see [THORNames](#thornames)).
 - **Votes**: node votes on mimir settings closest to passing (see
   [Votes](#votes)).
+- **Releases**: the THORNode releases being worked on (see
+  [Releases](#releases)).
 - **Pools**: each pool, deepest first: whether it can be swapped now (staged
   pools are not open yet, and a halted or paused chain blocks its pools),
   liquidity, the 2% depth (about how big a swap moves the price by 2%), 24h
@@ -99,7 +101,7 @@ Six tabs:
 - **Chains**: each connected chain, whether it is halted or paused, the
   last block THORChain observed on it, and its gas rate.
 
-Keys: `tab` or `1` to `6` switch tabs, `j` `k` select a node, `enter` opens
+Keys: `tab` or `1` to `7` switch tabs, `j` `k` select a node, `enter` opens
 it in the explorer, `r` fetches now, `,` opens the settings, `esc` closes.
 
 ## Churn
@@ -156,6 +158,25 @@ The votes are read only while the tab is open, at most every 30 minutes (`r`
 reads them now). Your node addresses are matched on this computer; they are
 not sent.
 
+## Releases
+
+Before nodes vote on an upgrade, the work for it happens on GitLab: THORNode
+merge requests carry a milestone named `Release-X.Y.Z`. The tab shows each
+milestone above the version the network runs (up to six, oldest first) with
+how many of its merge requests are merged and how many are still open, and
+where the release stands: in progress, all merged but not tagged yet, tagged,
+voted on by the nodes (with the approval from the upgrade proposal), or
+rolling out (some active nodes already run it). Under each, only the open
+merge requests worth a look: labelled `security` or `priority::1`/`2`, in
+conflict, or not updated for 30 days. A click opens one on GitLab, and each
+milestone links to its full list. Last, the latest release on GitLab and
+whether it was Bifrost-only (no consensus change, so no vote).
+
+GitLab still lists some old milestones as active, and its due dates are not
+kept up to date, so neither is shown. The releases are read from GitLab's
+public GraphQL API (no account) only while the tab is open, at most every 6
+hours (`r` reads them now). Nothing of yours is sent.
+
 ## Rewards and APY
 
 A node's reward since the last churn is THORNode's `current_award`. Your
@@ -179,11 +200,14 @@ omathor names refresh [name ...]
 omathor votes        the Votes tab
 omathor votes fetch [node ...]
                      read the votes (nodes are matched locally)
+omathor releases     the Releases tab
+omathor releases fetch
+                     read the milestones from GitLab
 omathor names find <thor1...>
                      which names an address owns (sends the address)
 omathor refresh      fetch now, then print the status
 omathor panel [tab]  open or close the panel; with a tab (network, bonds,
-                     names, votes, pools, chains), open it on that tab
+                     names, votes, releases, pools, chains), open it on that tab
 omathor --json ...   the same as JSON
 ```
 
@@ -214,6 +238,10 @@ refresh off) the service runs `omathor fetch`, which reads:
 - Midgard at `gateway.liquify.com`, with the node list: the churn history
   (for the date of the last churn), the network's bond APY, the reward
   split and the pools.
+
+While the Votes or Releases tab is open, THORNode's repository on GitLab is
+read too: ADR documents for the votes, milestones and merge requests for the
+releases (see [Votes](#votes) and [Releases](#releases)).
 
 Responses are compressed. That comes to about 40 MB a day with the panel
 closed, and about 90 MB if it stayed open all day.
@@ -269,6 +297,7 @@ The folder holds:
 | `summary.json` | Your bond addresses with their bonds and rewards |
 | `names.json` | Your THORNames, and which addresses were searched for names |
 | `votes.json`, `adrs.json` | Node votes and ADR titles |
+| `releases.json` | Upcoming THORNode milestones and their open merge requests |
 | `.fetch.*` | Work folders of a refresh that was cut off, for example by a shell restart |
 
 If the plugin was already removed without it, delete that folder and the two

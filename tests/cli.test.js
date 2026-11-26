@@ -478,3 +478,61 @@ test("a command that waited for the lock during an uninstall writes nothing", as
   assert.match(err, /uninstalled while this command waited; nothing was written/)
   assert.equal(fs.existsSync(stateDir()), false)
 })
+
+test("releases: milestones above the network's version from GitLab GraphQL, trimmed", async function() {
+  ok(["fetch", "--full"])
+  const gql = { OMATHOR_GITLAB_GRAPHQL: base + "/graphql" }
+  assert.match(ok(["releases", "fetch"], gql), /read 6 milestones above 3\.21\.5/)
+  const file = path.join(stateDir(), "releases.json")
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+  const r = JSON.parse(fs.readFileSync(file, "utf8"))
+  assert.equal(r.current, "3.21.5")
+  assert.deepEqual(r.milestones.map(function(m) { return m.title }),
+    ["Release-3.21.6", "Release-3.21.7", "Release-3.21.8", "Release-3.21.9", "Release-3.22.0", "Release-3.23.0"],
+    "older, odd and extra milestones are left out; oldest first, at most six")
+  const asked = (await requests()).filter(function(l) { return l.indexOf("/graphql ") === 0 })
+  assert.equal(asked.length, 3, "one query for the milestones, then three milestones per query")
+  assert.ok(asked.every(function(l) { return l.indexOf("drop") === -1 }))
+  const m = r.milestones[5]
+  assert.equal(m.open, 3)
+  assert.deepEqual(m.mrs.map(function(x) { return x.iid }), [5425, 5410], "a merge request without a plain number is dropped")
+  assert.equal(m.mrs[0].title.length, 160)
+  assert.match(m.mrs[0].title, /^Add NYM <b>token<\/b> y+$/, "control characters and line breaks go; QML shows it as plain text")
+  assert.deepEqual(m.mrs[0].labels, ["security", "priority::2"])
+  assert.equal(m.mrs[0].status, "CONFLICT")
+  assert.ok(!("webUrl" in m.mrs[0]), "no link from the response is kept")
+  assert.equal(r.milestones[4].merged, 106)
+  assert.deepEqual(r.releases.map(function(x) { return x.tag }), ["v3.21.2"])
+  assert.equal(r.releases[0].notes[1], "Bifrost-only maintenance release (no consensus change).")
+  assert.ok(JSON.stringify(r).length < 4000)
+
+  // The command prints what the service computed from the file.
+  const sum = Model.summarize(snapshot(), {}, Date.now(), null, null, r)
+  fs.writeFileSync(path.join(stateDir(), "summary.json"), JSON.stringify(sum))
+  const shown = ok(["releases"])
+  assert.match(shown, /^Upcoming THORNode releases \(the network runs 3\.21\.5\)/)
+  assert.match(shown, /3\.23\.0: 2 merged, 3 open \(1 draft\)\. In progress\n  !5425 Add NYM <b>token<\/b> y+ \[security, priority 2, conflict\]/)
+  assert.match(shown, /3\.22\.0: 106 merged, 0 open\. Nodes are voting on the upgrade: 40%/)
+  assert.equal(JSON.parse(ok(["--json", "releases"])).milestones.length, 6)
+})
+
+test("releases: a GitLab error, an oversized answer or a bad address keeps the last file", async function() {
+  const gql = { OMATHOR_GITLAB_GRAPHQL: base + "/graphql" }
+  const file = path.join(stateDir(), "releases.json")
+  const before = fs.readFileSync(file, "utf8")
+  await setMode("gql-error")
+  const failed = run(["releases", "fetch"], gql)
+  assert.notEqual(failed.code, 0)
+  assert.match(failed.err, /GitLab did not answer for the milestones/)
+  await setMode("gql-big")
+  assert.notEqual(run(["releases", "fetch"], gql).code, 0)
+  await setMode("ok")
+  assert.equal(fs.readFileSync(file, "utf8"), before)
+  const bad = run(["releases", "fetch"], { OMATHOR_GITLAB_GRAPHQL: "http://example.com/graphql" })
+  assert.notEqual(bad.code, 0)
+  assert.match(bad.err, /OMATHOR_GITLAB_GRAPHQL is not a valid https address/)
+  const hop = run(["releases", "fetch"], { OMATHOR_GITLAB_GRAPHQL: base + "/hop/graphql" })
+  assert.notEqual(hop.code, 0, "a redirect is refused")
+  assert.equal(fs.readFileSync(file, "utf8"), before)
+  assert.deepEqual(fs.readdirSync(stateDir()).filter(function(f) { return f.indexOf(".releases.") === 0 }), [], "no work folder is left")
+})

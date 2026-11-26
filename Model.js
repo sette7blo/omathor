@@ -944,6 +944,222 @@ function votesView(sum, now) {
   }
 }
 
+// ----- Releases -----
+// THORNode's merge requests carry a milestone named Release-X.Y.Z
+// (bin/omathor releases fetch). Links are built here from checked numbers
+// and versions, never taken from the response.
+
+var GITLAB_MR = "https://gitlab.com/thorchain/thornode/-/merge_requests"
+var RELEASES_EVERY = 6 * 3600
+var STALE_MR_DAYS = 30
+var RELEASE_FLAGS_SHOWN = 8
+
+function releasesDue(data, nowMs) {
+  return !data || !(num(data.fetchedAt) > 0) || num(nowMs) - num(data.fetchedAt) * 1000 >= RELEASES_EVERY * 1000
+}
+
+function milestoneVersion(title) {
+  var m = /^Release-([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$/.exec(String(title || ""))
+  return m ? m[1] : ""
+}
+
+function mergeRequestUrl(iid) {
+  var n = num(iid)
+  return n > 0 && n < 1e7 && Math.floor(n) === n ? GITLAB_MR + "/" + n : ""
+}
+
+function milestoneUrl(version) {
+  return /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/.test(version)
+    ? GITLAB_MR + "?scope=all&state=opened&milestone_title=Release-" + version : ""
+}
+
+// Why an open merge request is worth a look; "" when it is not.
+function mergeRequestFlags(mr, nowMs) {
+  var flags = []
+  var labels = Array.isArray(mr.labels) ? mr.labels : []
+  if (labels.indexOf("security") !== -1) flags.push("security")
+  for (var i = 0; i < labels.length; i++) {
+    var p = /^priority::([12])$/.exec(labels[i])
+    if (p) flags.push("priority " + p[1])
+  }
+  if (mr.status === "CONFLICT") flags.push("conflict")
+  var updated = num(mr.updated)
+  if (updated > 0 && num(nowMs) - updated * 1000 > STALE_MR_DAYS * 86400000) flags.push("idle " + Math.floor((num(nowMs) - updated * 1000) / 86400000) + " days")
+  return flags
+}
+
+// The first line of release notes that says something: not a heading of
+// just the version, not a bare "Changelog".
+function releaseHeadline(notes) {
+  var list = Array.isArray(notes) ? notes : []
+  for (var i = 0; i < list.length; i++) {
+    var l = text(list[i], 200).replace(/^[#>*\-\s]+/, "").replace(/[*`_]/g, "").replace(/\s+/g, " ").trim()
+    if (!l || /^(thornode\s+)?v?[0-9.]+$/i.test(l) || /^changelog:?$/i.test(l)) continue
+    return text(l, 160)
+  }
+  return ""
+}
+
+function releasesFor(data, sum, nowMs) {
+  var d = data && typeof data === "object" ? data : null
+  if (!d || !Array.isArray(d.milestones)) return null
+  var now = num(nowMs)
+  var current = text(sum && sum.thorVersion ? sum.thorVersion.current : "", 20) || text(d.current, 20)
+  var tagged = dict()
+  var releases = []
+  var list = Array.isArray(d.releases) ? d.releases : []
+  for (var r = 0; r < list.length; r++) {
+    var rel = list[r]
+    if (!rel || typeof rel !== "object") continue
+    var tag = text(rel.tag, 40)
+    var m = /^v?([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})(-.*)?$/.exec(tag)
+    if (!m) continue
+    if (!m[2]) tagged[m[1]] = true
+    var notes = Array.isArray(rel.notes) ? rel.notes : []
+    releases.push({
+      tag: tag,
+      version: m[1],
+      candidate: !!m[2],
+      at: num(rel.at) * 1000,
+      headline: releaseHeadline(notes),
+      bifrostOnly: notes.some(function(l) { return /bifrost-only|no consensus change/i.test(String(l)) })
+    })
+  }
+  var proposals = dict()
+  var ups = sum && Array.isArray(sum.upgrades) ? sum.upgrades : []
+  for (var u = 0; u < ups.length; u++) if (!ups[u].past) proposals[String(ups[u].name).replace(/^v/, "")] = ups[u]
+  var running = dict()
+  var versions = sum && Array.isArray(sum.versions) ? sum.versions : []
+  var active = 0
+  for (var v = 0; v < versions.length; v++) {
+    running[versions[v].version] = versions[v].count
+    active += versions[v].count
+  }
+
+  var milestones = []
+  for (var i = 0; i < d.milestones.length; i++) {
+    var ms = d.milestones[i]
+    if (!ms || typeof ms !== "object") continue
+    var version = milestoneVersion(ms.title)
+    // The network may have moved on since the read.
+    if (!version || (current && compareVersions(version, current) <= 0)) continue
+    var open = num(ms.open)
+    var merged = num(ms.merged)
+    var mrs = Array.isArray(ms.mrs) ? ms.mrs : []
+    var flagged = []
+    var drafts = 0
+    for (var j = 0; j < mrs.length; j++) {
+      var mr = mrs[j]
+      if (!mr || typeof mr !== "object") continue
+      if (mr.draft === true) drafts++
+      var url = mergeRequestUrl(mr.iid)
+      var flags = mergeRequestFlags(mr, now)
+      if (!url || !flags.length) continue
+      flagged.push({ iid: num(mr.iid), title: text(mr.title, 160).replace(/\s+/g, " "), flags: flags, draft: mr.draft === true, url: url,
+        rank: (flags.indexOf("security") !== -1 ? 0 : 2) + (flags.some(function(x) { return /^priority/.test(x) }) ? 0 : 1) })
+    }
+    flagged.sort(function(a, b) { return a.rank - b.rank || b.iid - a.iid })
+    var state = "work"
+    var proposal = Object.prototype.hasOwnProperty.call(proposals, version) ? proposals[version] : null
+    var runs = Object.prototype.hasOwnProperty.call(running, version) ? running[version] : 0
+    if (runs > 0) state = "rolling"
+    else if (proposal) state = "voting"
+    else if (tagged[version]) state = "tagged"
+    else if (open === 0 && merged > 0) state = "ready"
+    else if (open === 0 && merged === 0) continue
+    milestones.push({
+      version: version,
+      open: open,
+      merged: merged,
+      drafts: drafts,
+      progress: open + merged > 0 ? merged / (open + merged) : 0,
+      state: state,
+      percent: proposal ? num(proposal.percent) : 0,
+      running: runs,
+      active: active,
+      flagged: flagged.slice(0, RELEASE_FLAGS_SHOWN).map(function(f) { delete f.rank; return f }),
+      moreFlagged: Math.max(0, flagged.length - RELEASE_FLAGS_SHOWN),
+      url: milestoneUrl(version)
+    })
+  }
+  milestones.sort(function(a, b) { return compareVersions(a.version, b.version) })
+  var latest = null
+  for (var k = 0; k < releases.length; k++) if (!releases[k].candidate) { latest = releases[k]; break }
+  return { fetchedAt: num(d.fetchedAt) * 1000, current: current, milestones: milestones, latest: latest }
+}
+
+var RELEASE_STATES = {
+  work: "In progress",
+  ready: "All merged, not tagged yet",
+  tagged: "Tagged, no upgrade vote yet",
+  voting: "Nodes are voting on the upgrade",
+  rolling: "Rolling out"
+}
+
+function releaseState(m) {
+  if (m.state === "voting") return RELEASE_STATES.voting + ": " + percent(m.percent, 0)
+  if (m.state === "rolling") return RELEASE_STATES.rolling + ": " + m.running + " of " + m.active + " active nodes"
+  return RELEASE_STATES[m.state]
+}
+
+function releaseLines(sum, now) {
+  var r = sum.releases
+  if (!r) return ["No releases read yet. Open the Releases tab, or run: omathor releases fetch"]
+  var out = ["Upcoming THORNode releases" + (r.current ? " (the network runs " + r.current + ")" : "") + ". Read " + ago(r.fetchedAt, now) + "."]
+  if (!r.milestones.length) out.push("  None planned on GitLab above this version.")
+  for (var i = 0; i < r.milestones.length; i++) {
+    var m = r.milestones[i]
+    out.push("")
+    out.push(m.version + ": " + m.merged + " merged, " + m.open + " open" + (m.drafts ? " (" + m.drafts + " draft" + (m.drafts === 1 ? "" : "s") + ")" : "") + ". " + releaseState(m))
+    for (var j = 0; j < m.flagged.length; j++) {
+      var f = m.flagged[j]
+      out.push("  !" + f.iid + " " + f.title + " [" + f.flags.join(", ") + "]")
+    }
+    if (m.moreFlagged) out.push("  and " + m.moreFlagged + " more flagged")
+  }
+  if (r.latest) {
+    out.push("")
+    out.push("Latest release " + r.latest.tag + ", " + dateText(r.latest.at) + (r.latest.bifrostOnly ? ", Bifrost only (no vote)" : ""))
+    if (r.latest.headline) out.push("  " + r.latest.headline)
+  }
+  return out
+}
+
+// What the Releases tab draws.
+function releasesView(sum, now) {
+  var r = sum ? sum.releases : null
+  if (!r) return null
+  var level = { work: "", ready: "warn", tagged: "warn", voting: "warn", rolling: "" }
+  var cards = r.milestones.map(function(m) {
+    return {
+      title: m.version,
+      count: m.merged + " / " + (m.merged + m.open),
+      progress: m.progress,
+      state: releaseState(m),
+      level: level[m.state],
+      detail: m.open + " open" + (m.drafts ? ", " + m.drafts + " draft" + (m.drafts === 1 ? "" : "s") : "") + "  ·  " + m.merged + " merged",
+      flagged: m.flagged.map(function(f) {
+        return { text: "!" + f.iid + "  " + f.title, flags: f.flags.join("  ·  "), url: f.url, alert: f.flags.indexOf("security") !== -1 }
+      }),
+      more: m.moreFlagged ? m.moreFlagged + " more flagged" : "",
+      // Nothing open: nothing to list.
+      url: m.open ? m.url : ""
+    }
+  })
+  var next = r.milestones.length ? r.milestones[0] : null
+  var latest = r.latest
+  return {
+    tiles: [
+      tile("Network runs", r.current || "?", "lowest active version"),
+      tile("Next", next ? next.version : "none", next ? RELEASE_STATES[next.state].toLowerCase() : "nothing planned", next && level[next.state] ? "warn" : ""),
+      tile("GitLab release", latest ? latest.tag : "?", latest ? dateText(latest.at) + (latest.bifrostOnly ? ", Bifrost only" : "") : "")
+    ],
+    milestones: cards,
+    latest: latest ? { title: latest.tag + (latest.bifrostOnly ? "  ·  Bifrost only, no vote" : ""), text: latest.headline } : null,
+    asOf: r.fetchedAt ? (now - r.fetchedAt < 60000 ? "Read just now" : "Read " + ago(r.fetchedAt, now)) + " from GitLab" : ""
+  }
+}
+
 // ----- THORNames -----
 
 // Names are registered for years: "6y 6m", "45 days", then hours.
@@ -1032,7 +1248,7 @@ function nameIssue(n) {
   return "THORName " + n.name + " expires in " + longDuration(n.secondsLeft)
 }
 
-function summarize(snap, options, nowMs, namesData, votesData) {
+function summarize(snap, options, nowMs, namesData, votesData, releasesData) {
   var opts = settings(options)
   var now = num(nowMs) || Date.now()
   var out = {
@@ -1213,6 +1429,7 @@ function summarize(snap, options, nowMs, namesData, votesData) {
   }
 
   out.votes = votesFor(votesData, out)
+  out.releases = releasesFor(releasesData, out, now)
   out.pools = poolsFor(snap, out)
 
   out.issues = issues
@@ -1422,6 +1639,7 @@ function textLines(sum, opts, now) {
     chains: sum.hasData ? rowsToLines(chainRows(sum)) : statusLines(sum, opts, now),
     names: opts.names.length ? rowsToLines(nameRows(sum, opts, now)) : ["No THORNames. Add them in the panel's settings."],
     votes: sum.hasData ? voteLines(sum, now) : statusLines(sum, opts, now),
+    releases: sum.hasData ? releaseLines(sum, now) : statusLines(sum, opts, now),
     pools: sum.hasData ? (sum.pools.length ? rowsToLines(poolRows(sum, opts)) : ["No pool list yet."]) : statusLines(sum, opts, now)
   }
 }
@@ -1728,7 +1946,7 @@ function bondTargets(view) {
 
 // ----- Panel -----
 
-var TABS = ["network", "bond", "names", "votes", "pools", "chains"]
+var TABS = ["network", "bond", "names", "votes", "releases", "pools", "chains"]
 
 function tabs(sum) {
   return [
@@ -1736,6 +1954,7 @@ function tabs(sum) {
     { value: "bond", label: "Bonds" },
     { value: "names", label: "Names" },
     { value: "votes", label: "Votes" },
+    { value: "releases", label: "Releases" },
     { value: "pools", label: "Pools" },
     { value: "chains", label: "Chains" }
   ]
@@ -1862,6 +2081,7 @@ if (typeof module !== "undefined" && module.exports) {
     nameRows: nameRows, namesView: namesView,
     poolName: poolName, poolsView: poolsView,
     isOperational: isOperational, adrNumber: adrNumber, voteNodes: voteNodes, votesDue: votesDue, votesView: votesView,
+    releasesDue: releasesDue, releasesFor: releasesFor, releasesView: releasesView, mergeRequestFlags: mergeRequestFlags, releaseHeadline: releaseHeadline,
     money: money, shortMoney: shortMoney, percent: percent, duration: duration, compareVersions: compareVersions,
     halted: halted, secondsPerBlock: secondsPerBlock, churnInfo: churnInfo, churnLabel: churnLabel, chainInfo: chainInfo,
     churnRanks: churnRanks, apy: apy, bondsFor: bondsFor, summarize: summarize,

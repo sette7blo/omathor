@@ -78,7 +78,7 @@ Item {
   property string fetchError: ""
 
   function recompute(fromFetch) {
-    var next = Model.summarize(root.snapshot, root.options, Date.now(), root.namesData, root.votesData)
+    var next = Model.summarize(root.snapshot, root.options, Date.now(), root.namesData, root.votesData, root.releasesData)
     var previous = root.summary
     root.summary = next
     // Files can load before every path is bound; the first write waits.
@@ -243,6 +243,45 @@ Item {
       root.recompute(false)
     }
     onLoadFailed: root.votesData = null
+    onFileChanged: reload()
+  }
+
+  // --- Releases -------------------------------------------------------------
+  // Read only while the Releases tab is looked at, at most every 6 hours
+  // unless asked. Nothing of yours is sent.
+  property var releasesData: null
+  property string releasesError: ""
+  readonly property bool releasesBusy: releasesProc.running
+
+  function fetchReleases(force) {
+    if (releasesProc.running) return
+    if (!force && !Model.releasesDue(root.releasesData, Date.now())) return
+    root.releasesError = ""
+    releasesProc.command = [root.cli, "releases", "fetch"]
+    releasesProc.running = true
+  }
+
+  Process {
+    id: releasesProc
+    running: false
+    stderr: StdioCollector { id: releasesErr; waitForEnd: true }
+    onExited: function(code) {
+      if (code !== 0) root.releasesError = Model.errorText(releasesErr.text) || "Reading the releases failed."
+      releasesFile.reload()
+    }
+  }
+
+  FileView {
+    id: releasesFile
+    path: root.stateDir + "/releases.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      var data = Model.parseJson(text())
+      root.releasesData = data && typeof data === "object" ? data : null
+      root.recompute(false)
+    }
+    onLoadFailed: root.releasesData = null
     onFileChanged: reload()
   }
 

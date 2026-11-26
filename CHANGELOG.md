@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-11-26
+
 ### Added
 - A Releases tab (`omathor releases`): the THORNode milestones above the version the network
   runs, read from GitLab, with merged and open merge requests, the open ones worth a look
@@ -173,7 +175,8 @@ project uses [Semantic Versioning](https://semver.org/).
   your own endpoints can be set instead. Responses are compressed, and the node list is
   read every 30 minutes, every 10 while you look at it.
 
-[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/sette7blo/omathor/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/sette7blo/omathor/compare/v0.1.10...v0.2.0
 [v0.1.10]: https://github.com/sette7blo/omathor/compare/v0.1.9...v0.1.10
 [v0.1.9]: https://github.com/sette7blo/omathor/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/sette7blo/omathor/compare/v0.1.7...v0.1.8
